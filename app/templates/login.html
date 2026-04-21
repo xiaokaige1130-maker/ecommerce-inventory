@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 - {{ config.APP_NAME }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+    <form class="login-box" method="post">
+        <h1>{{ config.APP_NAME }}</h1>
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <label>账号<input name="username" autocomplete="username" required></label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}<div class="flash flash-{{ category }}">{{ message }}</div>{% endfor %}
+        {% endwith %}
+        <button type="submit">登录</button>
+    </form>
+</body>
+</html>

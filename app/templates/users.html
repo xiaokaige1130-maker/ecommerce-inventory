@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>账号权限</h2>
+    <form class="form-grid compact" method="post">
+        <input name="username" placeholder="账号" required>
+        <input name="password" type="password" placeholder="密码" required>
+        <input name="display_name" placeholder="姓名">
+        <select name="role">
+            <option value="boss">老板</option>
+            <option value="warehouse">仓库</option>
+            <option value="purchase">采购</option>
+            <option value="sales">销售</option>
+            <option value="finance">财务</option>
+            <option value="admin">管理员</option>
+        </select>
+        <button>新增账号</button>
+    </form>
+</section>
+<section>
+    <div class="table-wrap"><table><thead><tr><th>账号</th><th>姓名</th><th>角色</th><th>状态</th><th>创建时间</th></tr></thead><tbody>
+    {% for row in rows %}<tr><td>{{ row.username }}</td><td>{{ row.display_name }}</td><td>{{ row.role|role_name }}</td><td>{{ "启用" if row.is_active else "停用" }}</td><td>{{ row.created_at }}</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+{% endblock %}

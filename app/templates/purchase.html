@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>采购中心</h2>
+    <form class="form-grid compact" method="post">
+        <select name="supplier_id" required>{% for p in suppliers %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+        <select name="item_id" required>{% for item in items %}<option value="{{ item.id }}">{{ item.item_code }} - {{ item.item_name }}</option>{% endfor %}</select>
+        <select name="warehouse_id">{% for w in warehouses %}<option value="{{ w.id }}">{{ w.name }}</option>{% endfor %}</select>
+        <input name="quantity" type="number" step="0.01" placeholder="数量" required>
+        <input name="unit_cost" type="number" step="0.01" placeholder="采购单价" required>
+        <input name="source_no" placeholder="采购单号/备注">
+        <input name="note" placeholder="备注">
+        <button>采购入库</button>
+    </form>
+    <form class="toolbar" method="post" enctype="multipart/form-data" action="{{ url_for('main.import_data', kind='purchase') }}">
+        <a class="button-link" href="{{ url_for('main.template', kind='purchase') }}">下载采购导入模板</a>
+        <input type="file" name="file" accept=".xlsx" required>
+        <button>批量导入采购入库</button>
+    </form>
+    <p class="hint">没有供应商时，先到“客户供应商”新增供应商。</p>
+</section>
+<section>
+    <h2>采购建议</h2>
+    <div class="table-wrap"><table><thead><tr><th>类型</th><th>编号</th><th>名称</th><th>采购对象</th><th>库存</th><th>安全库存</th><th>30天销量</th><th>建议采购</th><th>提前期</th></tr></thead><tbody>
+    {% for row in suggestions %}
+        <tr><td>{{ row.item_type|item_type_name }}</td><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td>{{ row.supplier_name or "-" }}</td><td>{{ row.stock_qty }}</td><td>{{ row.safety_stock }}</td><td>{{ row.sales_30 }}</td><td class="{{ 'neg' if row.suggest_qty > 0 else '' }}">{{ row.suggest_qty }}</td><td>{{ row.lead_days }}</td></tr>
+    {% else %}<tr><td colspan="9" class="empty">暂无采购建议</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section>
+    <h2>采购单查询</h2>
+    <p><a class="button-link" href="{{ url_for('main.export', kind='purchase') }}">导出采购汇总</a></p>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>单号</th><th>供应商</th><th>明细数</th><th>金额</th><th>状态</th></tr></thead><tbody>
+    {% for row in documents %}<tr><td>{{ row.created_at }}</td><td>{{ row.document_no }}</td><td>{{ row.partner_name }}</td><td>{{ row.line_count }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td><td>{{ row.status }}</td></tr>{% else %}<tr><td colspan="6" class="empty">暂无采购单</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section><h2>最近流水</h2>{% include "_movement_table.html" %}</section>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>出库发货台</h2>
+    <p class="hint">这里处理订单出库：锁库表示先占住库存，发货表示正式扣库存并生成销售出库流水。</p>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>订单号</th><th>状态</th><th>平台</th><th>店铺</th><th>客户</th><th>金额</th><th>锁库</th><th>销售出库/发货</th><th>取消</th></tr></thead><tbody>
+    {% for row in orders %}
+        <tr>
+            <td>{{ row.created_at }}</td><td>{{ row.order_no }}</td><td>{{ row.status|order_status_name }}</td><td>{{ row.platform }}</td><td>{{ row.shop_name }}</td><td>{{ row.partner_name or row.customer_name }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td>
+            <td>
+                {% if row.status in ["pending_review", "locked"] %}
+                <form class="inline-form" method="post"><input type="hidden" name="order_id" value="{{ row.id }}"><input type="hidden" name="action" value="lock"><button>锁库</button></form>
+                {% endif %}
+            </td>
+            <td>
+                {% if row.status in ["pending_review", "locked"] %}
+                <form class="inline-form" method="post">
+                    <input type="hidden" name="order_id" value="{{ row.id }}">
+                    <input type="hidden" name="action" value="ship">
+                    <input name="logistics_company" placeholder="物流">
+                    <input name="tracking_no" placeholder="快递单号">
+                    <button>发货</button>
+                </form>
+                {% endif %}
+            </td>
+            <td>
+                {% if row.status in ["pending_review", "locked"] %}
+                <form class="inline-form" method="post"><input type="hidden" name="order_id" value="{{ row.id }}"><input type="hidden" name="action" value="cancel"><button>取消</button></form>
+                {% endif %}
+            </td>
+        </tr>
+    {% else %}<tr><td colspan="10" class="empty">暂无仓库作业订单</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section>
+    <h2>可用库存</h2>
+    <div class="table-wrap"><table><thead><tr><th>类型</th><th>编号</th><th>名称</th><th>仓库</th><th>库存</th><th>锁定</th><th>可用</th></tr></thead><tbody>
+    {% for row in stock_rows %}<tr><td>{{ row.item_type|item_type_name }}</td><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td>{{ row.warehouse_name }}</td><td>{{ row.stock_qty }}</td><td>{{ row.locked_qty }}</td><td class="{{ 'neg' if row.available_qty < 0 else 'pos' }}">{{ row.available_qty }}</td></tr>{% else %}<tr><td colspan="7" class="empty">暂无库存</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+{% endblock %}

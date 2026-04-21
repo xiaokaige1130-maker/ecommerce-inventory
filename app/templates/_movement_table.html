@@ -1,0 +1,22 @@
+<div class="table-wrap">
+<table>
+    <thead><tr><th>时间</th><th>动作</th><th>编号</th><th>货物</th><th>类型</th><th>仓库</th><th>数量</th><th>来源</th><th>备注</th></tr></thead>
+    <tbody>
+    {% for row in movements %}
+        <tr>
+            <td>{{ row.created_at }}</td>
+            <td>{{ row.movement_type|movement_type_name }}</td>
+            <td>{{ row.item_code }}</td>
+            <td>{{ row.item_name }}</td>
+            <td>{{ row.item_type|item_type_name }}</td>
+            <td>{{ row.warehouse_name }}</td>
+            <td class="{{ 'neg' if row.quantity < 0 else 'pos' }}">{{ row.quantity }}</td>
+            <td>{{ row.source_no or row.source_type or "-" }}</td>
+            <td>{{ row.note }}</td>
+        </tr>
+    {% else %}
+        <tr><td colspan="9" class="empty">暂无数据</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>

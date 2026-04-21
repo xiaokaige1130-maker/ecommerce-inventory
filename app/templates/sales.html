@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>销售出库</h2>
+    <form class="form-grid compact" method="post">
+        <select name="customer_id" required>{% for p in customers %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+        <select name="item_id" required>{% for item in items %}<option value="{{ item.id }}">{{ item.item_code }} - {{ item.item_name }}</option>{% endfor %}</select>
+        <select name="warehouse_id">{% for w in warehouses %}<option value="{{ w.id }}">{{ w.name }}</option>{% endfor %}</select>
+        <input name="quantity" type="number" step="0.01" placeholder="数量" required>
+        <input name="sale_price" type="number" step="0.01" placeholder="销售单价" required>
+        <input name="source_no" placeholder="销售单号/平台订单号">
+        <input name="note" placeholder="备注">
+        <button>销售出库</button>
+    </form>
+    <p class="hint">销售只选择“成品货”。没有客户时，先到“客户供应商”新增客户。</p>
+</section>
+<section>
+    <h2>销售单查询</h2>
+    <p><a class="button-link" href="{{ url_for('main.export', kind='sales') }}">导出销售汇总</a></p>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>单号</th><th>客户</th><th>明细数</th><th>金额</th><th>状态</th></tr></thead><tbody>
+    {% for row in documents %}<tr><td>{{ row.created_at }}</td><td>{{ row.document_no }}</td><td>{{ row.partner_name }}</td><td>{{ row.line_count }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td><td>{{ row.status }}</td></tr>{% else %}<tr><td colspan="6" class="empty">暂无销售单</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section><h2>最近流水</h2>{% include "_movement_table.html" %}</section>
+{% endblock %}

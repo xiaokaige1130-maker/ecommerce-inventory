@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>客户供应商</h2>
+    <form class="form-grid compact" method="post">
+        <select name="partner_type"><option value="customer">客户</option><option value="supplier">供应商</option></select>
+        <input name="name" placeholder="名称" required>
+        <input name="contact_name" placeholder="联系人">
+        <input name="phone" placeholder="电话">
+        <input name="address" placeholder="地址">
+        <input name="note" placeholder="备注">
+        <button>新增</button>
+    </form>
+</section>
+<section><div class="table-wrap"><table><thead><tr><th>类型</th><th>名称</th><th>联系人</th><th>电话</th><th>地址</th><th>备注</th></tr></thead><tbody>
+{% for row in rows %}<tr><td>{{ row.partner_type|partner_type_name }}</td><td>{{ row.name }}</td><td>{{ row.contact_name }}</td><td>{{ row.phone }}</td><td>{{ row.address }}</td><td>{{ row.note }}</td></tr>{% else %}<tr><td colspan="6" class="empty">暂无数据</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

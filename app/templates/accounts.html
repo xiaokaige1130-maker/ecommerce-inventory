@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>财务对账</h2>
+    <div class="finance-cards">
+        <div><strong>{{ "%.2f"|format(rows|selectattr("partner_type", "equalto", "customer")|sum(attribute="balance")) }}</strong><span>客户应收合计</span></div>
+        <div><strong>{{ "%.2f"|format(rows|selectattr("partner_type", "equalto", "supplier")|sum(attribute="balance")) }}</strong><span>供应商应付合计</span></div>
+        <div><strong>{{ settlements|length }}</strong><span>平台对账单</span></div>
+    </div>
+    <div class="workbench-grid">
+        <div>
+            <h3>收付款登记</h3>
+            <form class="form-grid stack" method="post">
+                <input type="hidden" name="action" value="payment">
+                <select name="entry_type"><option value="customer_receive">客户收款</option><option value="supplier_pay">供应商付款</option></select>
+                <select name="partner_id">{% for p in partners %}<option value="{{ p.id }}">{{ p.partner_type|partner_type_name }} - {{ p.name }}</option>{% endfor %}</select>
+                <input name="amount" type="number" step="0.01" placeholder="金额" required>
+                <input name="source_no" placeholder="收付款单号">
+                <input name="note" placeholder="备注">
+                <button>保存收付款</button>
+            </form>
+        </div>
+        <div>
+            <h3>平台对账登记</h3>
+            <form class="form-grid stack" method="post">
+                <input type="hidden" name="action" value="settlement">
+                <input name="settlement_no" placeholder="对账单号">
+                <input name="platform" value="拼多多" placeholder="平台">
+                <input name="amount" type="number" step="0.01" placeholder="成交额">
+                <input name="commission" type="number" step="0.01" value="0" placeholder="佣金">
+                <input name="freight" type="number" step="0.01" value="0" placeholder="运费">
+                <input name="refund_amount" type="number" step="0.01" value="0" placeholder="退款">
+                <input name="settled_at" placeholder="对账日期">
+                <input name="note" placeholder="备注">
+                <button>保存平台对账</button>
+            </form>
+        </div>
+    </div>
+    <p><a class="button-link" href="{{ url_for('main.export', kind='accounts') }}">导出账目汇总</a></p>
+    <div class="table-wrap"><table><thead><tr><th>类型</th><th>名称</th><th>余额</th><th>说明</th></tr></thead><tbody>
+    {% for row in rows %}
+        <tr><td>{{ row.partner_type|partner_type_name }}</td><td>{{ row.name }}</td><td class="{{ 'neg' if row.balance < 0 else 'pos' }}">{{ "%.2f"|format(row.balance) }}</td><td>{% if row.partner_type == 'customer' %}正数表示客户欠款{% else %}正数表示应付供应商{% endif %}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">暂无账目</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section>
+    <h2>平台对账明细</h2>
+    <p><a class="button-link" href="{{ url_for('main.export', kind='settlements') }}">导出平台对账</a></p>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>单号</th><th>平台</th><th>成交额</th><th>佣金</th><th>运费</th><th>退款</th><th>净额</th><th>备注</th></tr></thead><tbody>
+    {% for row in settlements %}<tr><td>{{ row.created_at }}</td><td>{{ row.settlement_no }}</td><td>{{ row.platform }}</td><td>{{ "%.2f"|format(row.amount) }}</td><td>{{ "%.2f"|format(row.commission) }}</td><td>{{ "%.2f"|format(row.freight) }}</td><td>{{ "%.2f"|format(row.refund_amount) }}</td><td class="pos">{{ "%.2f"|format(row.net_amount) }}</td><td>{{ row.note }}</td></tr>{% else %}<tr><td colspan="9" class="empty">暂无平台对账</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section>
+    <h2>账目明细</h2>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>对象</th><th>科目</th><th>方向</th><th>金额</th><th>来源</th><th>备注</th></tr></thead><tbody>
+    {% for row in entries %}<tr><td>{{ row.created_at }}</td><td>{{ row.partner_name }}</td><td>{{ row.account_type }}</td><td>{{ row.direction }}</td><td>{{ "%.2f"|format(row.amount) }}</td><td>{{ row.source_no or row.source_type }}</td><td>{{ row.note }}</td></tr>{% else %}<tr><td colspan="7" class="empty">暂无明细</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+{% endblock %}

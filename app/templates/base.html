@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ config.APP_NAME }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="topbar">
+        <div class="wrap topbar-inner">
+            <div>
+                <h1>{{ config.APP_NAME }}</h1>
+                <p>{{ config.APP_SUBTITLE }}</p>
+            </div>
+            <nav>
+                <a href="{{ url_for('main.home') }}">首页</a>
+                <a href="{{ url_for('main.items') }}">商品中心</a>
+                <a href="{{ url_for('main.orders') }}">订单中心</a>
+                <a href="{{ url_for('main.warehouse_workbench') }}">出库发货</a>
+                <a href="{{ url_for('main.stock') }}">库存中心</a>
+                <a href="{{ url_for('main.purchase') }}">采购中心</a>
+                <a href="{{ url_for('main.production') }}">生产组装</a>
+                <a href="{{ url_for('main.partners') }}">客户供应商</a>
+                <a href="{{ url_for('main.accounts') }}">财务对账</a>
+                <a href="{{ url_for('main.returns') }}">售后退货</a>
+                <a href="{{ url_for('main.users') }}">账号</a>
+                {% if session.get("logged_in") %}<a href="{{ url_for('main.logout') }}">退出</a>{% endif %}
+            </nav>
+        </div>
+    </header>
+    <main class="wrap">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

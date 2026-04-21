@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="grid stats">
+    <div><strong>{{ stats["items"] }}</strong><span>商品资料</span></div>
+    <div><strong>{{ "%.0f"|format(dashboard.quarter_sales_qty) }}</strong><span>季度销售数据</span></div>
+    <div><strong>{{ "%.2f"|format(dashboard.quarter_sales_amount) }}</strong><span>季度销售金额</span></div>
+    <div><strong>{{ dashboard.quarter_order_count }}</strong><span>季度订单</span></div>
+    <div><strong>{{ dashboard.return_system.quarter_total }}</strong><span>季度退货数据</span></div>
+    <div><strong>{{ dashboard.return_system.quarter_abnormal }}</strong><span>季度退货异常</span></div>
+    <div><strong>{{ "%.1f"|format(dashboard.return_rate) }}%</strong><span>退货/销量比</span></div>
+</section>
+<section class="grid stats">
+    <div><strong>{{ stats["finished"] }}</strong><span>成品货数量</span></div>
+    <div><strong>{{ stats["low_stock"] }}</strong><span>低库存预警</span></div>
+    <div><strong>{{ stats["pending_orders"] }}</strong><span>待处理订单</span></div>
+    <div><strong>{{ "%.2f"|format(stats["receivable"]) }}</strong><span>客户应收</span></div>
+    <div><strong>{{ "%.2f"|format(stats["payable"]) }}</strong><span>供应商应付</span></div>
+    <div><strong>{{ stats["pending_returns"] }}</strong><span>待匹配退货</span></div>
+</section>
+<section class="dashboard-grid">
+    <div>
+        <h2>季度卖得好</h2>
+        <div class="table-wrap">
+        <table>
+            <thead><tr><th>排名</th><th>商品</th><th>销量</th><th>销售额</th></tr></thead>
+            <tbody>
+            {% for row in dashboard.top_sales %}
+                <tr><td>{{ loop.index }}</td><td>{{ row.item_name }}</td><td>{{ "%.0f"|format(row.qty) }}</td><td>{{ "%.2f"|format(row.amount) }}</td></tr>
+            {% else %}<tr><td colspan="4" class="empty">暂无销售数据</td></tr>{% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+    <div>
+        <h2>季度退得多</h2>
+        <div class="table-wrap">
+        <table>
+            <thead><tr><th>排名</th><th>商品</th><th>退货件数</th></tr></thead>
+            <tbody>
+            {% for row in dashboard.return_system.top_returns %}
+                <tr><td>{{ loop.index }}</td><td>{{ row.product_name }}</td><td>{{ row.qty }}</td></tr>
+            {% else %}<tr><td colspan="3" class="empty">暂无退货数据</td></tr>{% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+</section>
+<section class="dashboard-grid">
+    <div>
+        <h2>低库存预警</h2>
+        <div class="table-wrap">
+        <table>
+            <thead><tr><th>类型</th><th>编号</th><th>名称</th><th>库存</th><th>安全库存</th></tr></thead>
+            <tbody>
+            {% for row in dashboard.low_stock %}
+                <tr><td>{{ row.item_type|item_type_name }}</td><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td class="neg">{{ row.stock_qty }}</td><td>{{ row.safety_stock }}</td></tr>
+            {% else %}<tr><td colspan="5" class="empty">暂无低库存</td></tr>{% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+    <div>
+        <h2>最近退货入库</h2>
+        <div class="table-wrap">
+        <table>
+            <thead><tr><th>时间</th><th>快递单号</th><th>商品</th><th>状态</th><th>异常</th></tr></thead>
+            <tbody>
+            {% for row in dashboard.return_system.recent_returns %}
+                <tr><td>{{ row.first_scanned_at }}</td><td>{{ row.barcode }}</td><td>{{ row.product_name or "-" }}</td><td>{{ row.match_status }}</td><td>{{ row.anomaly_note or "" }}</td></tr>
+            {% else %}<tr><td colspan="5" class="empty">暂无退货记录</td></tr>{% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+</section>
+<section>
+    <h2>最近库存流水</h2>
+    {% include "_movement_table.html" %}
+</section>
+{% endblock %}
