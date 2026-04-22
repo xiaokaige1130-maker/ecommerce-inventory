@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sqlite3
 import sys
 from pathlib import Path
 from io import BytesIO
@@ -89,6 +90,35 @@ purchase_resp = client.post(
 )
 assert purchase_resp.status_code == 200
 
+stock_seed_resp = client.post(
+    "/stock",
+    data={
+        "movement_type": "adjust_in",
+        "item_id": "2",
+        "warehouse_id": "1",
+        "quantity": "5",
+        "unit_cost": "60",
+        "source_no": "SEED-FINISHED",
+    },
+    follow_redirects=True,
+)
+assert stock_seed_resp.status_code == 200
+overdraw_resp = client.post(
+    "/stock",
+    data={
+        "movement_type": "sale_out",
+        "item_id": "2",
+        "warehouse_id": "1",
+        "quantity": "999",
+        "unit_cost": "60",
+        "source_no": "OVERDRAW",
+    },
+    follow_redirects=True,
+)
+assert overdraw_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    assert conn.execute("SELECT COUNT(*) FROM stock_movements WHERE source_no = 'OVERDRAW'").fetchone()[0] == 0
+
 sales_resp = client.post(
     "/sales",
     data={
@@ -170,6 +200,29 @@ prod_resp = client.post(
     follow_redirects=True,
 )
 assert prod_resp.status_code == 200
+dup_prod_resp = client.post(
+    "/production",
+    data={"action": "produce", "finished_item_id": "2", "warehouse_id": "1", "quantity": "1", "source_no": "PD-TEST"},
+    follow_redirects=True,
+)
+assert dup_prod_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    assert conn.execute("SELECT COUNT(*) FROM production_orders WHERE production_no = 'PD-TEST'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM stock_movements WHERE source_no = 'PD-TEST'").fetchone()[0] == 2
+
+client.post(
+    "/users",
+    data={"username": "staff1", "password": "staffpass", "display_name": "员工", "role": "staff"},
+    follow_redirects=True,
+)
+client.get("/logout", follow_redirects=True)
+staff_login = client.post("/login", data={"username": "staff1", "password": "staffpass"}, follow_redirects=True)
+assert staff_login.status_code == 200
+forbidden_accounts = client.get("/accounts", follow_redirects=True)
+assert "没有权限".encode("utf-8") in forbidden_accounts.data
+client.get("/logout", follow_redirects=True)
+resp = client.post("/login", data={"username": "admin", "password": "admin123"}, follow_redirects=True)
+assert resp.status_code == 200
 
 api_resp = client.post(
     "/api/returns/inbound",

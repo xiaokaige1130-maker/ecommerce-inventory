@@ -79,6 +79,24 @@ def login_required(func):
     return wrapper
 
 
+def roles_required(*roles: str):
+    allowed_roles = set(roles)
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if not session.get("logged_in"):
+                return redirect(url_for("main.login", next=request.path))
+            if session.get("role") not in allowed_roles:
+                flash("当前账号没有权限执行该操作", "danger")
+                return redirect(url_for("main.home"))
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 @main_bp.route("/login", methods=["GET", "POST"])
 def login():
     next_url = request.args.get("next") or request.form.get("next") or url_for("main.home")
@@ -153,6 +171,7 @@ def import_data(kind: str):
 
 @main_bp.route("/items", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "warehouse", "purchase")
 def items():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -182,6 +201,7 @@ def items():
 
 @main_bp.route("/stock", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "warehouse")
 def stock():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -214,6 +234,7 @@ def stock():
 
 @main_bp.route("/purchase", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "purchase")
 def purchase():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -246,6 +267,7 @@ def purchase():
 
 @main_bp.route("/sales", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "sales")
 def sales():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -277,6 +299,7 @@ def sales():
 
 @main_bp.route("/orders", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "sales")
 def orders():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -299,6 +322,7 @@ def orders():
 
 @main_bp.route("/warehouse-workbench", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "warehouse")
 def warehouse_workbench():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -332,6 +356,7 @@ def warehouse_workbench():
 
 @main_bp.route("/partners", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "purchase", "sales", "finance")
 def partners():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -346,6 +371,7 @@ def partners():
 
 @main_bp.route("/accounts", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "finance")
 def accounts():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -372,6 +398,7 @@ def accounts():
 @main_bp.route("/returns")
 @main_bp.route("/returns", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "warehouse")
 def returns():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -386,8 +413,6 @@ def returns():
         except Exception as exc:
             flash(f"处理失败：{exc}", "danger")
         return redirect(url_for("main.returns"))
-    repositories.sync_return_system_records(database_path, current_app.config["RETURN_SYSTEM_DATABASE_PATH"])
-    repositories.sync_after_sales_from_returns(database_path)
     return render_template(
         "returns.html",
         rows=repositories.list_return_inbounds(database_path),
@@ -398,6 +423,7 @@ def returns():
 
 @main_bp.route("/production", methods=["GET", "POST"])
 @login_required
+@roles_required("admin", "warehouse")
 def production():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
@@ -424,6 +450,7 @@ def production():
 
 @main_bp.route("/users", methods=["GET", "POST"])
 @login_required
+@roles_required("admin")
 def users():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":

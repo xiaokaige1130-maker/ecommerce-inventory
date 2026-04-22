@@ -529,6 +529,10 @@ def create_stock_movement(
     ts = now()
     movement_no = f"SM{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
     with get_connection(database_path) as conn:
+        if signed_qty < 0:
+            current_qty = _stock_quantity(conn, item_id, warehouse_id)
+            if current_qty + signed_qty < -0.000001:
+                raise ValueError(f"库存不足：当前库存 {current_qty:g}，本次出库 {abs(signed_qty):g}")
         conn.execute(
             """
             INSERT INTO stock_movements (
@@ -557,6 +561,37 @@ def create_stock_movement(
         return dict(row)
 
 
+def _stock_quantity(conn, item_id: int, warehouse_id: int) -> float:
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(quantity), 0) AS quantity
+        FROM stock_movements
+        WHERE item_id = ?
+          AND warehouse_id = ?
+        """,
+        (item_id, warehouse_id),
+    ).fetchone()
+    return float(row["quantity"] or 0)
+
+
+def _locked_quantity(conn, item_id: int, warehouse_id: int) -> float:
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(quantity), 0) AS quantity
+        FROM stock_locks
+        WHERE item_id = ?
+          AND warehouse_id = ?
+          AND status = 'locked'
+        """,
+        (item_id, warehouse_id),
+    ).fetchone()
+    return float(row["quantity"] or 0)
+
+
+def _available_quantity(conn, item_id: int, warehouse_id: int) -> float:
+    return _stock_quantity(conn, item_id, warehouse_id) - _locked_quantity(conn, item_id, warehouse_id)
+
+
 def create_document(
     database_path: str,
     document_type: str,
@@ -575,6 +610,17 @@ def create_document(
     document_no = source_no or f"{prefix}{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
     total_amount = sum(abs(float(row["quantity"])) * float(row["unit_price"]) for row in lines)
     with get_connection(database_path) as conn:
+        if document_type == "sale":
+            required: dict[tuple[int, int], float] = {}
+            for line in lines:
+                key = (int(line["item_id"]), int(line["warehouse_id"]))
+                required[key] = required.get(key, 0) + abs(float(line["quantity"]))
+            for (item_id, warehouse_id), required_qty in required.items():
+                current_qty = _stock_quantity(conn, item_id, warehouse_id)
+                if current_qty < required_qty - 0.000001:
+                    item = conn.execute("SELECT item_name FROM items WHERE id = ?", (item_id,)).fetchone()
+                    item_name = item["item_name"] if item else str(item_id)
+                    raise ValueError(f"{item_name} 库存不足：当前库存 {current_qty:g}，本次销售 {required_qty:g}")
         cur = conn.execute(
             """
             INSERT INTO documents (
@@ -859,6 +905,15 @@ def lock_sales_order(database_path: str, order_id: int) -> None:
             raise ValueError("当前状态不能锁库")
         conn.execute("DELETE FROM stock_locks WHERE source_type='sales_order' AND source_id=? AND status='locked'", (order_id,))
         lines = conn.execute("SELECT * FROM sales_order_lines WHERE sales_order_id = ?", (order_id,)).fetchall()
+        required_by_item: dict[int, float] = {}
+        for line in lines:
+            required_by_item[line["item_id"]] = required_by_item.get(line["item_id"], 0) + float(line["quantity"])
+        for item_id, required_qty in required_by_item.items():
+            available_qty = _available_quantity(conn, item_id, order["warehouse_id"])
+            if available_qty < required_qty - 0.000001:
+                item = conn.execute("SELECT item_name FROM items WHERE id = ?", (item_id,)).fetchone()
+                item_name = item["item_name"] if item else str(item_id)
+                raise ValueError(f"{item_name} 可用库存不足：当前可用 {available_qty:g}，需要锁库 {required_qty:g}")
         for line in lines:
             conn.execute(
                 """
@@ -1332,9 +1387,23 @@ def create_production(database_path: str, form: dict, created_by: str = "") -> N
         raise ValueError("生产数量必须大于 0")
     ts = now()
     with get_connection(database_path) as conn:
+        if conn.execute("SELECT id FROM production_orders WHERE production_no = ?", (source_no,)).fetchone():
+            raise ValueError("生产单号已存在")
+        lines = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT bl.*, i.item_name AS component_name FROM bom_lines bl JOIN items i ON i.id = bl.component_item_id WHERE bl.finished_item_id = ?",
+                (finished_item_id,),
+            ).fetchall()
+        ]
+        for line in lines:
+            required_qty = quantity * float(line["quantity"])
+            current_qty = _stock_quantity(conn, line["component_item_id"], warehouse_id)
+            if current_qty < required_qty - 0.000001:
+                raise ValueError(f"{line['component_name']} 库存不足：当前库存 {current_qty:g}，需要领用 {required_qty:g}")
         conn.execute(
             """
-            INSERT OR IGNORE INTO production_orders (
+            INSERT INTO production_orders (
                 production_no, finished_item_id, warehouse_id, quantity, production_type,
                 production_line, operator_name, note, created_by, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1353,14 +1422,6 @@ def create_production(database_path: str, form: dict, created_by: str = "") -> N
             ),
         )
         conn.commit()
-    with get_connection(database_path) as conn:
-        lines = [
-            dict(row)
-            for row in conn.execute(
-                "SELECT * FROM bom_lines WHERE finished_item_id = ?",
-                (finished_item_id,),
-            ).fetchall()
-        ]
     for line in lines:
         create_stock_movement(
             database_path,

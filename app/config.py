@@ -43,6 +43,7 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", "5100"))
+    DEBUG = os.getenv("DEBUG", "0").strip().lower() in {"1", "true", "yes", "on"}
     DATABASE_PATH = _runtime_path("DATABASE_PATH", "data/app.db")
     EXPORT_DIR = _runtime_path("EXPORT_DIR", "exports")
     AUTH_USERS = _parse_auth_users()
