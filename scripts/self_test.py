@@ -183,6 +183,7 @@ order_resp = client.post(
 assert order_resp.status_code == 200
 assert client.get("/orders").status_code == 200
 assert client.get("/orders?status=pending_review&keyword=WEB-TEST").status_code == 200
+assert client.get("/orders?source_channel=manual&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
 for kind in ("items", "orders", "purchase", "stock"):
     assert client.get(f"/template/{kind}").status_code == 200
 
@@ -235,10 +236,15 @@ settlement_resp = client.post(
 assert settlement_resp.status_code == 200
 assert client.get("/purchase?keyword=PO-TEST").status_code == 200
 assert client.get("/sales?keyword=SO-TEST").status_code == 200
-assert client.get("/stock?movement_type=adjust_in&movement_keyword=SEED-FINISHED").status_code == 200
-assert client.get("/accounts?source_type=payment&keyword=PAY-TEST").status_code == 200
+assert client.get("/purchase?source_channel=manual&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
+assert client.get("/sales?source_channel=manual&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
+assert client.get("/stock?movement_type=adjust_in&movement_keyword=SEED-FINISHED&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
+assert client.get("/accounts?source_type=payment&keyword=PAY-TEST&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
 assert client.get("/documents/purchase/1").status_code == 200
 assert client.get("/documents/sale/2").status_code == 200
+assert client.get("/orders?copy_id=1").status_code == 200
+assert client.get("/purchase?copy_id=1").status_code == 200
+assert client.get("/sales?copy_id=2").status_code == 200
 
 client.post(
     "/production",
@@ -296,10 +302,11 @@ assert pending_resp.status_code == 200
 assert pending_resp.get_json()["result"]["status"] == "pending_match"
 match_resp = client.post("/returns", data={"return_id": "2", "item_id": "2"}, follow_redirects=True)
 assert match_resp.status_code == 200
-assert client.get("/returns?status=matched_inbound&keyword=YT001").status_code == 200
+assert client.get("/returns?status=matched_inbound&keyword=YT001&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
 assert client.get("/stock").status_code == 200
 assert client.get("/returns").status_code == 200
 assert client.get("/warehouse-workbench").status_code == 200
+assert client.get("/warehouse-workbench?status=shipped&keyword=WEB-TEST&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
 for kind in ("stock", "accounts", "returns", "purchase", "sales", "orders", "settlements"):
     assert client.get(f"/export/{kind}").status_code == 200
 print("Self test passed.")

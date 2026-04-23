@@ -17,6 +17,7 @@
         <div><span>创建时间</span><strong>{{ order.created_at }}</strong></div>
     </div>
     <p class="hint">备注：{{ order.note or "-" }}</p>
+    <p><a class="button-link" href="{{ url_for('main.orders', copy_id=order.id) }}">复制新建订单</a></p>
 </section>
 <section>
     <h2>订单明细</h2>

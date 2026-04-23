@@ -12,18 +12,19 @@
         <button>批量导入平台订单</button>
     </form>
     <form class="form-grid compact" method="post">
-        <input name="order_no" placeholder="订单号">
-        <select name="platform">{% for platform in platforms %}<option value="{{ platform }}">{{ platform }}</option>{% endfor %}</select>
-        <input name="shop_name" value="默认店铺" placeholder="店铺">
-        <select name="customer_id"><option value="">散客</option>{% for p in customers %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
-        <input name="customer_name" placeholder="客户姓名">
-        <select name="warehouse_id">{% for w in warehouses %}<option value="{{ w.id }}">{{ w.name }}</option>{% endfor %}</select>
-        <input name="note" placeholder="备注">
-        <select name="item_id" required>{% for item in items %}<option value="{{ item.id }}">{{ item.item_code }} - {{ item.item_name }}</option>{% endfor %}</select>
-        <input name="quantity" type="number" step="0.01" value="1" placeholder="数量" required>
-        <input name="sale_price" type="number" step="0.01" value="0" placeholder="销售单价" required>
-        <button>新增订单</button>
+        <input name="order_no" value="{{ copy_order.order_no ~ '-COPY' if copy_order else '' }}" placeholder="订单号">
+        <select name="platform">{% for platform in platforms %}<option value="{{ platform }}" {% if copy_order and copy_order.platform == platform %}selected{% endif %}>{{ platform }}</option>{% endfor %}</select>
+        <input name="shop_name" value="{{ copy_order.shop_name if copy_order else '默认店铺' }}" placeholder="店铺">
+        <select name="customer_id"><option value="">散客</option>{% for p in customers %}<option value="{{ p.id }}" {% if copy_order and copy_order.customer_id == p.id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}</select>
+        <input name="customer_name" value="{{ copy_order.customer_name if copy_order else '' }}" placeholder="客户姓名">
+        <select name="warehouse_id">{% for w in warehouses %}<option value="{{ w.id }}" {% if copy_order and copy_order.warehouse_id == w.id %}selected{% endif %}>{{ w.name }}</option>{% endfor %}</select>
+        <input name="note" value="{{ copy_order.note if copy_order else '' }}" placeholder="备注">
+        <select name="item_id" required>{% for item in items %}<option value="{{ item.id }}" {% if copy_line and copy_line.item_id == item.id %}selected{% endif %}>{{ item.item_code }} - {{ item.item_name }}</option>{% endfor %}</select>
+        <input name="quantity" type="number" step="0.01" value="{{ copy_line.quantity if copy_line else '1' }}" placeholder="数量" required>
+        <input name="sale_price" type="number" step="0.01" value="{{ copy_line.sale_price if copy_line else '0' }}" placeholder="销售单价" required>
+        <button>{{ "复制后新建订单" if copy_order else "新增订单" }}</button>
     </form>
+    {% if copy_order %}<p class="hint"><a class="button-link" href="{{ url_for('main.orders') }}">取消复制</a></p>{% endif %}
 </section>
 <section>
     <h2>订单查询</h2>
@@ -39,6 +40,8 @@
             <option value="manual" {% if current_source_channel == 'manual' %}selected{% endif %}>手工录入</option>
             <option value="import" {% if current_source_channel == 'import' %}selected{% endif %}>批量导入</option>
         </select>
+        <input name="date_from" type="date" value="{{ date_from }}">
+        <input name="date_to" type="date" value="{{ date_to }}">
         <input name="keyword" value="{{ keyword }}" placeholder="订单号 / 客户 / 平台 / 快递单号">
         <button>查询</button>
         <a class="button-link" href="{{ url_for('main.export', kind='orders') }}">导出订单</a>

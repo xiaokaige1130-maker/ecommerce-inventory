@@ -64,6 +64,8 @@
             <option value="{{ key }}" {% if current_movement_type == key %}selected{% endif %}>{{ key|movement_type_name }}</option>
             {% endfor %}
         </select>
+        <input name="date_from" type="date" value="{{ date_from }}">
+        <input name="date_to" type="date" value="{{ date_to }}">
         <input name="movement_keyword" value="{{ movement_keyword }}" placeholder="商品 / 来源单号 / 备注">
         <button>查询</button>
     </form>

@@ -454,15 +454,19 @@ def stock():
         return redirect(url_for("main.stock"))
     movement_keyword = str(request.args.get("movement_keyword", "")).strip()
     movement_type = str(request.args.get("movement_type", "")).strip()
+    date_from = str(request.args.get("date_from", "")).strip()
+    date_to = str(request.args.get("date_to", "")).strip()
     return render_template(
         "stock.html",
         stock_rows=repositories.list_stock(database_path),
-        movements=repositories.recent_movements(database_path, keyword=movement_keyword, movement_type=movement_type),
+        movements=repositories.recent_movements(database_path, keyword=movement_keyword, movement_type=movement_type, date_from=date_from, date_to=date_to),
         items=repositories.list_items(database_path),
         warehouses=repositories.list_warehouses(database_path),
         locations=repositories.list_locations(database_path),
         movement_keyword=movement_keyword,
         current_movement_type=movement_type,
+        date_from=date_from,
+        date_to=date_to,
     )
 
 
@@ -491,16 +495,26 @@ def purchase():
         return redirect(url_for("main.purchase"))
     keyword = str(request.args.get("keyword", "")).strip()
     source_channel = str(request.args.get("source_channel", "")).strip()
+    date_from = str(request.args.get("date_from", "")).strip()
+    date_to = str(request.args.get("date_to", "")).strip()
+    copy_id = int(request.args.get("copy_id") or 0)
+    copy_document = repositories.get_document(database_path, copy_id) if copy_id else None
+    copy_lines = repositories.document_lines(database_path, copy_id) if copy_document else []
+    copy_line = copy_lines[0] if copy_lines else None
     return render_template(
         "purchase.html",
         items=repositories.list_items(database_path),
         warehouses=repositories.list_warehouses(database_path),
         suppliers=repositories.list_partners(database_path, "supplier"),
         movements=repositories.recent_movements(database_path, limit=30),
-        documents=repositories.list_documents(database_path, "purchase", keyword, source_channel, 50),
+        documents=repositories.list_documents(database_path, "purchase", keyword, source_channel, 50, date_from, date_to),
         suggestions=repositories.purchase_suggestions(database_path),
         keyword=keyword,
         current_source_channel=source_channel,
+        date_from=date_from,
+        date_to=date_to,
+        copy_document=copy_document,
+        copy_line=copy_line,
     )
 
 
@@ -529,15 +543,25 @@ def sales():
         return redirect(url_for("main.sales"))
     keyword = str(request.args.get("keyword", "")).strip()
     source_channel = str(request.args.get("source_channel", "")).strip()
+    date_from = str(request.args.get("date_from", "")).strip()
+    date_to = str(request.args.get("date_to", "")).strip()
+    copy_id = int(request.args.get("copy_id") or 0)
+    copy_document = repositories.get_document(database_path, copy_id) if copy_id else None
+    copy_lines = repositories.document_lines(database_path, copy_id) if copy_document else []
+    copy_line = copy_lines[0] if copy_lines else None
     return render_template(
         "sales.html",
         items=repositories.list_items(database_path, "finished"),
         warehouses=repositories.list_warehouses(database_path),
         customers=repositories.list_partners(database_path, "customer"),
         movements=repositories.recent_movements(database_path, limit=30),
-        documents=repositories.list_documents(database_path, "sale", keyword, source_channel, 50),
+        documents=repositories.list_documents(database_path, "sale", keyword, source_channel, 50, date_from, date_to),
         keyword=keyword,
         current_source_channel=source_channel,
+        date_from=date_from,
+        date_to=date_to,
+        copy_document=copy_document,
+        copy_line=copy_line,
     )
 
 
@@ -555,6 +579,12 @@ def orders():
         return redirect(url_for("main.orders"))
     keyword = str(request.args.get("keyword", "")).strip()
     source_channel = str(request.args.get("source_channel", "")).strip()
+    date_from = str(request.args.get("date_from", "")).strip()
+    date_to = str(request.args.get("date_to", "")).strip()
+    copy_id = int(request.args.get("copy_id") or 0)
+    copy_order = repositories.get_sales_order(database_path, copy_id) if copy_id else None
+    copy_lines = repositories.order_lines(database_path, copy_id) if copy_order else []
+    copy_line = copy_lines[0] if copy_lines else None
     return render_template(
         "orders.html",
         rows=repositories.list_sales_orders(
@@ -563,6 +593,8 @@ def orders():
             keyword,
             source_channel,
             100,
+            date_from,
+            date_to,
         ),
         items=repositories.list_items(database_path, "finished"),
         warehouses=repositories.list_warehouses(database_path),
@@ -570,7 +602,11 @@ def orders():
         current_status=str(request.args.get("status", "")).strip(),
         keyword=keyword,
         current_source_channel=source_channel,
+        date_from=date_from,
+        date_to=date_to,
         platforms=repositories.PLATFORMS,
+        copy_order=copy_order,
+        copy_line=copy_line,
     )
 
 
@@ -601,10 +637,18 @@ def warehouse_workbench():
         except Exception as exc:
             flash(f"处理失败：{exc}", "danger")
         return redirect(url_for("main.warehouse_workbench"))
+    status = str(request.args.get("status", "")).strip()
+    keyword = str(request.args.get("keyword", "")).strip()
+    date_from = str(request.args.get("date_from", "")).strip()
+    date_to = str(request.args.get("date_to", "")).strip()
     return render_template(
         "warehouse.html",
-        orders=repositories.list_sales_orders(database_path, limit=100),
+        orders=repositories.list_sales_orders(database_path, status, keyword, "", 100, date_from, date_to),
         stock_rows=repositories.list_stock(database_path),
+        current_status=status,
+        keyword=keyword,
+        date_from=date_from,
+        date_to=date_to,
     )
 
 
@@ -653,15 +697,19 @@ def accounts():
     partner_id = int(request.args.get("partner_id") or 0) or None
     keyword = str(request.args.get("keyword", "")).strip()
     source_type = str(request.args.get("source_type", "")).strip()
+    date_from = str(request.args.get("date_from", "")).strip()
+    date_to = str(request.args.get("date_to", "")).strip()
     return render_template(
         "accounts.html",
         rows=repositories.account_summary(database_path),
         partners=repositories.list_partners(database_path),
-        entries=repositories.list_account_entries(database_path, partner_id, keyword, source_type),
+        entries=repositories.list_account_entries(database_path, partner_id, keyword, source_type, 200, date_from, date_to),
         settlements=repositories.list_platform_settlements(database_path),
         current_partner_id=partner_id or "",
         keyword=keyword,
         current_source_type=source_type,
+        date_from=date_from,
+        date_to=date_to,
     )
 
 
@@ -684,13 +732,17 @@ def returns():
         return redirect(url_for("main.returns"))
     status = str(request.args.get("status", "")).strip()
     keyword = str(request.args.get("keyword", "")).strip()
+    date_from = str(request.args.get("date_from", "")).strip()
+    date_to = str(request.args.get("date_to", "")).strip()
     return render_template(
         "returns.html",
-        rows=repositories.list_return_inbounds(database_path, status, keyword),
+        rows=repositories.list_return_inbounds(database_path, status, keyword, 200, date_from, date_to),
         finished_items=repositories.list_items(database_path, "finished"),
         after_sales=repositories.list_after_sales(database_path),
         current_status=status,
         keyword=keyword,
+        date_from=date_from,
+        date_to=date_to,
     )
 
 

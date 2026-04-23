@@ -63,6 +63,8 @@
             <option value="{{ value }}" {% if current_source_type == value %}selected{% endif %}>{{ value|source_channel_name }}</option>
             {% endfor %}
         </select>
+        <input name="date_from" type="date" value="{{ date_from }}">
+        <input name="date_to" type="date" value="{{ date_to }}">
         <input name="keyword" value="{{ keyword }}" placeholder="对象 / 来源单号 / 备注">
         <button>查询</button>
     </form>

@@ -13,6 +13,7 @@
         <div><span>创建人</span><strong>{{ document.created_by or "-" }}</strong></div>
     </div>
     <p class="hint">备注：{{ document.note or "-" }}</p>
+    <p><a class="button-link" href="{{ url_for('main.purchase' if document.document_type == 'purchase' else 'main.sales', copy_id=document.id) }}">复制新建{{ "采购单" if document.document_type == "purchase" else "销售单" }}</a></p>
 </section>
 <section>
     <h2>单据明细</h2>

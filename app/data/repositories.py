@@ -808,7 +808,14 @@ def list_stock(database_path: str) -> list[dict]:
         return result
 
 
-def recent_movements(database_path: str, limit: int = 100, keyword: str = "", movement_type: str = "") -> list[dict]:
+def recent_movements(
+    database_path: str,
+    limit: int = 100,
+    keyword: str = "",
+    movement_type: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> list[dict]:
     sql = """
         SELECT sm.*, i.item_name, i.item_code, i.item_type, w.name AS warehouse_name, p.name AS partner_name
         FROM stock_movements sm
@@ -823,6 +830,12 @@ def recent_movements(database_path: str, limit: int = 100, keyword: str = "", mo
     if clean_type:
         sql += " AND sm.movement_type = ?"
         params.append(clean_type)
+    if date_from:
+        sql += " AND date(sm.created_at) >= date(?)"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date(sm.created_at) <= date(?)"
+        params.append(date_to)
     if clean_keyword:
         like = f"%{clean_keyword}%"
         sql += " AND (i.item_code LIKE ? OR i.item_name LIKE ? OR COALESCE(sm.source_no, '') LIKE ? OR COALESCE(sm.note, '') LIKE ?)"
@@ -849,7 +862,15 @@ def account_summary(database_path: str) -> list[dict]:
         return [dict(row) for row in rows]
 
 
-def list_documents(database_path: str, document_type: str = "", keyword: str = "", source_channel: str = "", limit: int = 100) -> list[dict]:
+def list_documents(
+    database_path: str,
+    document_type: str = "",
+    keyword: str = "",
+    source_channel: str = "",
+    limit: int = 100,
+    date_from: str = "",
+    date_to: str = "",
+) -> list[dict]:
     sql = """
         SELECT d.*, p.name AS partner_name, COUNT(dl.id) AS line_count
         FROM documents d
@@ -864,6 +885,12 @@ def list_documents(database_path: str, document_type: str = "", keyword: str = "
     if source_channel:
         sql += " AND COALESCE(d.source_channel, 'manual') = ?"
         params.append(source_channel)
+    if date_from:
+        sql += " AND date(d.created_at) >= date(?)"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date(d.created_at) <= date(?)"
+        params.append(date_to)
     clean_keyword = str(keyword).strip()
     if clean_keyword:
         like = f"%{clean_keyword}%"
@@ -913,6 +940,8 @@ def list_account_entries(
     keyword: str = "",
     source_type: str = "",
     limit: int = 200,
+    date_from: str = "",
+    date_to: str = "",
 ) -> list[dict]:
     sql = """
         SELECT ae.*, p.name AS partner_name, p.partner_type
@@ -927,6 +956,12 @@ def list_account_entries(
     if source_type:
         sql += " AND COALESCE(ae.source_type, '') = ?"
         params.append(source_type)
+    if date_from:
+        sql += " AND date(ae.created_at) >= date(?)"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date(ae.created_at) <= date(?)"
+        params.append(date_to)
     clean_keyword = str(keyword).strip()
     if clean_keyword:
         like = f"%{clean_keyword}%"
@@ -998,7 +1033,15 @@ def create_sales_order(database_path: str, form: dict, created_by: str = "") -> 
         return dict(row)
 
 
-def list_sales_orders(database_path: str, status: str = "", keyword: str = "", source_channel: str = "", limit: int = 100) -> list[dict]:
+def list_sales_orders(
+    database_path: str,
+    status: str = "",
+    keyword: str = "",
+    source_channel: str = "",
+    limit: int = 100,
+    date_from: str = "",
+    date_to: str = "",
+) -> list[dict]:
     sql = """
         SELECT so.*, p.name AS partner_name, COUNT(sol.id) AS line_count
         FROM sales_orders so
@@ -1013,6 +1056,12 @@ def list_sales_orders(database_path: str, status: str = "", keyword: str = "", s
     if source_channel:
         sql += " AND COALESCE(so.source_channel, 'manual') = ?"
         params.append(source_channel)
+    if date_from:
+        sql += " AND date(so.created_at) >= date(?)"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date(so.created_at) <= date(?)"
+        params.append(date_to)
     clean_keyword = str(keyword).strip()
     if clean_keyword:
         like = f"%{clean_keyword}%"
@@ -1462,7 +1511,14 @@ def handle_return_inbound(database_path: str, payload: dict) -> dict:
     return {"status": status, "return_inbound": return_inbound, "stock_movement": movement}
 
 
-def list_return_inbounds(database_path: str, status: str = "", keyword: str = "", limit: int = 200) -> list[dict]:
+def list_return_inbounds(
+    database_path: str,
+    status: str = "",
+    keyword: str = "",
+    limit: int = 200,
+    date_from: str = "",
+    date_to: str = "",
+) -> list[dict]:
     sql = """
         SELECT ri.*, i.item_code, i.item_name
         FROM return_inbounds ri
@@ -1473,6 +1529,12 @@ def list_return_inbounds(database_path: str, status: str = "", keyword: str = ""
     if status:
         sql += " AND ri.status = ?"
         params.append(status)
+    if date_from:
+        sql += " AND date(ri.created_at) >= date(?)"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date(ri.created_at) <= date(?)"
+        params.append(date_to)
     clean_keyword = str(keyword).strip()
     if clean_keyword:
         like = f"%{clean_keyword}%"

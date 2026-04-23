@@ -15,6 +15,8 @@
             <option value="{{ value }}" {% if current_status == value %}selected{% endif %}>{{ value }}</option>
             {% endfor %}
         </select>
+        <input name="date_from" type="date" value="{{ date_from }}">
+        <input name="date_to" type="date" value="{{ date_to }}">
         <input name="keyword" value="{{ keyword }}" placeholder="快递单号 / 订单号 / 商品 / 客户">
         <button>查询</button>
     </form>
