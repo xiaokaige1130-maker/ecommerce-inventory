@@ -279,6 +279,18 @@ CREATE TABLE IF NOT EXISTS operation_logs (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS exception_marks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exception_type TEXT NOT NULL,
+    reference_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    note TEXT,
+    updated_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(exception_type, reference_key)
+);
+
 CREATE TABLE IF NOT EXISTS bom_lines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     finished_item_id INTEGER NOT NULL,
@@ -317,6 +329,7 @@ CREATE INDEX IF NOT EXISTS idx_production_orders_item ON production_orders(finis
 CREATE INDEX IF NOT EXISTS idx_stock_locks_item ON stock_locks(item_id, warehouse_id, status);
 CREATE INDEX IF NOT EXISTS idx_locations_warehouse ON locations(warehouse_id);
 CREATE INDEX IF NOT EXISTS idx_operation_logs_entity ON operation_logs(entity_type, entity_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_exception_marks_key ON exception_marks(exception_type, reference_key);
 """
 
 
@@ -403,6 +416,22 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_operation_logs_entity ON operation_logs(entity_type, entity_id, created_at)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS exception_marks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exception_type TEXT NOT NULL,
+            reference_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            note TEXT,
+            updated_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(exception_type, reference_key)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_exception_marks_key ON exception_marks(exception_type, reference_key)")
     for table_name, columns in migrations.items():
         existing = {
             row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()

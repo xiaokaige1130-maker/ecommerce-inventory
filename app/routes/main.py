@@ -315,7 +315,27 @@ def home():
 @roles_required("admin", "warehouse", "sales", "finance")
 def exceptions():
     database_path = current_app.config["DATABASE_PATH"]
-    return render_template("exceptions.html", dashboard=repositories.exception_dashboard(database_path))
+    include_closed = str(request.args.get("include_closed", "")).strip() == "1"
+    return render_template("exceptions.html", dashboard=repositories.exception_dashboard(database_path, include_closed), include_closed=include_closed)
+
+
+@main_bp.route("/exceptions/mark", methods=["POST"])
+@login_required
+@roles_required("admin", "warehouse", "sales", "finance")
+def exception_mark():
+    try:
+        repositories.upsert_exception_mark(
+            current_app.config["DATABASE_PATH"],
+            str(request.form.get("exception_type", "")).strip(),
+            str(request.form.get("reference_key", "")).strip(),
+            str(request.form.get("status", "")).strip(),
+            str(request.form.get("note", "")).strip(),
+            session.get("username", ""),
+        )
+        flash("异常状态已更新", "success")
+    except Exception as exc:
+        flash(f"更新异常状态失败：{exc}", "danger")
+    return redirect(request.referrer or url_for("main.exceptions"))
 
 
 @main_bp.route("/orders/<int:order_id>")
@@ -328,7 +348,14 @@ def order_detail(order_id: int):
         flash("订单不存在", "danger")
         return redirect(url_for("main.orders"))
     lines = repositories.order_lines(database_path, order_id)
-    return render_template("order_detail.html", order=order, lines=lines, logs=repositories.list_operation_logs(database_path, "sales_order", order_id))
+    return render_template(
+        "order_detail.html",
+        order=order,
+        lines=lines,
+        logs=repositories.list_operation_logs(database_path, "sales_order", order_id),
+        stock_movements=repositories.list_stock_movements_for_reference(database_path, "sales_order", order["order_no"]),
+        account_entries=repositories.list_account_entries_for_reference(database_path, "sales_order", order["order_no"]),
+    )
 
 
 @main_bp.route("/returns/<int:return_id>")
@@ -346,7 +373,13 @@ def return_detail(return_id: int):
     except Exception:
         payload_data = {}
     after_sales_rows = repositories.list_after_sales_by_tracking(database_path, row["tracking_no"])
-    return render_template("return_detail.html", row=row, payload_data=payload_data, after_sales_rows=after_sales_rows)
+    return render_template(
+        "return_detail.html",
+        row=row,
+        payload_data=payload_data,
+        after_sales_rows=after_sales_rows,
+        stock_movements=repositories.list_stock_movements_for_reference(database_path, source_no=row["tracking_no"]),
+    )
 
 
 @main_bp.route("/documents/<document_type>/<int:document_id>")
@@ -362,7 +395,14 @@ def document_detail(document_type: str, document_id: int):
         flash("单据不存在", "danger")
         return redirect(url_for("main.purchase" if document_type == "purchase" else "main.sales"))
     lines = repositories.document_lines(database_path, document_id)
-    return render_template("document_detail.html", document=document, lines=lines, logs=repositories.list_operation_logs(database_path, "document", document_id))
+    return render_template(
+        "document_detail.html",
+        document=document,
+        lines=lines,
+        logs=repositories.list_operation_logs(database_path, "document", document_id),
+        stock_movements=repositories.list_stock_movements_for_reference(database_path, document_id=document_id),
+        account_entries=repositories.list_account_entries_for_reference(database_path, document["document_type"], document["document_no"]),
+    )
 
 
 @main_bp.route("/orders/<int:order_id>/action", methods=["POST"])

@@ -64,6 +64,63 @@ def list_operation_logs(database_path: str, entity_type: str, entity_id: int, li
         ]
 
 
+def upsert_exception_mark(
+    database_path: str,
+    exception_type: str,
+    reference_key: str,
+    status: str,
+    note: str = "",
+    updated_by: str = "",
+) -> None:
+    if status not in {"open", "resolved", "ignored"}:
+        raise ValueError("异常状态无效")
+    ts = now()
+    with get_connection(database_path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM exception_marks WHERE exception_type = ? AND reference_key = ?",
+            (exception_type, reference_key),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE exception_marks
+                SET status = ?, note = ?, updated_by = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, note.strip(), updated_by, ts, existing["id"]),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO exception_marks (
+                    exception_type, reference_key, status, note, updated_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (exception_type, reference_key, status, note.strip(), updated_by, ts, ts),
+            )
+        conn.commit()
+
+
+def _exception_marks_map(conn) -> dict[tuple[str, str], dict]:
+    rows = conn.execute("SELECT * FROM exception_marks").fetchall()
+    return {
+        (str(row["exception_type"]), str(row["reference_key"])): dict(row)
+        for row in rows
+    }
+
+
+def _attach_exception_mark(rows: list[dict], marks: dict[tuple[str, str], dict], exception_type: str, key_field: str) -> list[dict]:
+    result = []
+    for row in rows:
+        mark = marks.get((exception_type, str(row.get(key_field) or "")))
+        row["exception_status"] = mark["status"] if mark else "open"
+        row["exception_note"] = mark["note"] if mark else ""
+        row["exception_updated_by"] = mark["updated_by"] if mark else ""
+        row["exception_updated_at"] = mark["updated_at"] if mark else ""
+        result.append(row)
+    return result
+
+
 def latest_snapshot_tokens(database_path: str) -> dict[str, str]:
     with get_connection(database_path) as conn:
         stock_row = conn.execute(
@@ -2302,6 +2359,62 @@ def list_return_inbounds(
         return [dict(row) for row in rows]
 
 
+def list_stock_movements_for_reference(
+    database_path: str,
+    source_type: str = "",
+    source_no: str = "",
+    document_id: int | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    sql = """
+        SELECT sm.*, i.item_code, i.item_name, i.item_type, w.name AS warehouse_name, p.name AS partner_name
+        FROM stock_movements sm
+        JOIN items i ON i.id = sm.item_id
+        JOIN warehouses w ON w.id = sm.warehouse_id
+        LEFT JOIN partners p ON p.id = sm.partner_id
+        WHERE sm.status = 'active'
+    """
+    params: list = []
+    if source_type:
+        sql += " AND sm.source_type = ?"
+        params.append(source_type)
+    if source_no:
+        sql += " AND sm.source_no = ?"
+        params.append(source_no)
+    if document_id:
+        sql += " AND sm.document_id = ?"
+        params.append(document_id)
+    sql += " ORDER BY sm.created_at DESC LIMIT ?"
+    params.append(limit)
+    with get_connection(database_path) as conn:
+        return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def list_account_entries_for_reference(
+    database_path: str,
+    source_type: str = "",
+    source_no: str = "",
+    limit: int = 100,
+) -> list[dict]:
+    sql = """
+        SELECT ae.*, p.name AS partner_name, p.partner_type
+        FROM account_entries ae
+        JOIN partners p ON p.id = ae.partner_id
+        WHERE ae.status = 'active'
+    """
+    params: list = []
+    if source_type:
+        sql += " AND ae.source_type = ?"
+        params.append(source_type)
+    if source_no:
+        sql += " AND ae.source_no = ?"
+        params.append(source_no)
+    sql += " ORDER BY ae.created_at DESC LIMIT ?"
+    params.append(limit)
+    with get_connection(database_path) as conn:
+        return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
 def match_return_inbound(database_path: str, return_id: int, item_id: int) -> dict:
     item = get_item(database_path, item_id)
     if not item or item["item_type"] != "finished":
@@ -2474,8 +2587,9 @@ def list_production_orders(database_path: str, limit: int = 100) -> list[dict]:
         return [dict(row) for row in rows]
 
 
-def exception_dashboard(database_path: str) -> dict:
+def exception_dashboard(database_path: str, include_closed: bool = False) -> dict:
     with get_connection(database_path) as conn:
+        marks = _exception_marks_map(conn)
         negative_stock = [
             dict(row)
             for row in conn.execute(
@@ -2490,6 +2604,7 @@ def exception_dashboard(database_path: str) -> dict:
                 """
             ).fetchall()
         ]
+        negative_stock = _attach_exception_mark(negative_stock, marks, "negative_stock", "item_code")
         shipped_unpaid = [
             dict(row)
             for row in conn.execute(
@@ -2512,6 +2627,7 @@ def exception_dashboard(database_path: str) -> dict:
                 """
             ).fetchall()
         ]
+        shipped_unpaid = _attach_exception_mark(shipped_unpaid, marks, "shipped_unpaid", "order_no")
         pending_returns = [
             dict(row)
             for row in conn.execute(
@@ -2525,6 +2641,7 @@ def exception_dashboard(database_path: str) -> dict:
                 """
             ).fetchall()
         ]
+        pending_returns = _attach_exception_mark(pending_returns, marks, "pending_returns", "tracking_no")
         document_mismatch = [
             dict(row)
             for row in conn.execute(
@@ -2555,6 +2672,12 @@ def exception_dashboard(database_path: str) -> dict:
                 """
             ).fetchall()
         ]
+        document_mismatch = _attach_exception_mark(document_mismatch, marks, "document_mismatch", "document_no")
+    if not include_closed:
+        negative_stock = [row for row in negative_stock if row["exception_status"] == "open"]
+        shipped_unpaid = [row for row in shipped_unpaid if row["exception_status"] == "open"]
+        pending_returns = [row for row in pending_returns if row["exception_status"] == "open"]
+        document_mismatch = [row for row in document_mismatch if row["exception_status"] == "open"]
     return {
         "negative_stock": negative_stock,
         "shipped_unpaid": shipped_unpaid,

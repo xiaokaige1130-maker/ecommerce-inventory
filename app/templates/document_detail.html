@@ -39,6 +39,18 @@
     </tbody></table></div>
 </section>
 <section>
+    <h2>关联库存流水</h2>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>动作</th><th>商品</th><th>仓库</th><th>数量</th><th>来源单号</th><th>备注</th></tr></thead><tbody>
+    {% for row in stock_movements %}<tr><td>{{ row.created_at }}</td><td>{{ row.movement_type|movement_type_name }}</td><td>{{ row.item_code }} - {{ row.item_name }}</td><td>{{ row.warehouse_name }}</td><td class="{{ 'neg' if row.quantity < 0 else 'pos' }}">{{ row.quantity }}</td><td>{{ row.source_no or "-" }}</td><td>{{ row.note or "-" }}</td></tr>{% else %}<tr><td colspan="7" class="empty">暂无关联库存流水</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section>
+    <h2>关联账目明细</h2>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>对象</th><th>科目</th><th>方向</th><th>金额</th><th>来源单号</th><th>备注</th></tr></thead><tbody>
+    {% for row in account_entries %}<tr><td>{{ row.created_at }}</td><td>{{ row.partner_name }}</td><td>{{ row.account_type }}</td><td>{{ row.direction }}</td><td>{{ "%.2f"|format(row.amount) }}</td><td>{{ row.source_no or "-" }}</td><td>{{ row.note or "-" }}</td></tr>{% else %}<tr><td colspan="7" class="empty">暂无关联账目明细</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section>
     <h2>操作日志</h2>
     <div class="table-wrap"><table><thead><tr><th>时间</th><th>动作</th><th>摘要</th><th>详情</th><th>操作人</th></tr></thead><tbody>
     {% for row in logs %}<tr><td>{{ row.created_at }}</td><td>{{ row.action }}</td><td>{{ row.summary }}</td><td>{{ row.detail or "-" }}</td><td>{{ row.created_by or "-" }}</td></tr>{% else %}<tr><td colspan="5" class="empty">暂无日志</td></tr>{% endfor %}

@@ -371,15 +371,28 @@ assert client.get("/accounts?source_type=payment&keyword=PAY-TEST&date_from=2026
 purchase_detail = client.get("/documents/purchase/1")
 assert purchase_detail.status_code == 200
 assert "操作日志".encode("utf-8") in purchase_detail.data
+assert "关联库存流水".encode("utf-8") in purchase_detail.data
+assert "关联账目明细".encode("utf-8") in purchase_detail.data
 sales_detail = client.get("/documents/sale/2")
 assert sales_detail.status_code == 200
 assert "操作日志".encode("utf-8") in sales_detail.data
+assert "关联库存流水".encode("utf-8") in sales_detail.data
+assert "关联账目明细".encode("utf-8") in sales_detail.data
 assert client.get("/orders?copy_id=1").status_code == 200
 assert client.get("/purchase?copy_id=1").status_code == 200
 assert client.get("/sales?copy_id=2").status_code == 200
 exceptions_page = client.get("/exceptions")
 assert exceptions_page.status_code == 200
 assert "异常看板".encode("utf-8") in exceptions_page.data
+mark_exception_resp = client.post(
+    "/exceptions/mark",
+    data={"exception_type": "pending_returns", "reference_key": "YT002", "status": "ignored"},
+    follow_redirects=True,
+)
+assert mark_exception_resp.status_code == 200
+closed_exceptions = client.get("/exceptions?include_closed=1")
+assert closed_exceptions.status_code == 200
+assert "显示已处理".encode("utf-8") in closed_exceptions.data
 
 stock_page = client.get("/stock")
 stock_snapshot = re.search(rb'name="expected_stock_snapshot" value="([^"]*)"', stock_page.data).group(1).decode()
@@ -538,13 +551,18 @@ assert pending_resp.get_json()["result"]["status"] == "pending_match"
 match_resp = client.post("/returns", data={"return_id": "2", "item_id": "2"}, follow_redirects=True)
 assert match_resp.status_code == 200
 assert client.get("/returns?status=matched_inbound&keyword=YT001&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
-assert client.get("/returns/1").status_code == 200
+return_detail = client.get("/returns/1")
+assert return_detail.status_code == 200
+assert "关联库存流水".encode("utf-8") in return_detail.data
 assert client.get("/stock").status_code == 200
 assert client.get("/returns").status_code == 200
 assert client.get("/warehouse-workbench").status_code == 200
 assert client.get("/warehouse-workbench?status=shipped&keyword=WEB-TEST-EDIT&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
 batch_lock = client.post("/warehouse-workbench", data={"action": "lock", "order_ids": ["2"]}, follow_redirects=True)
 assert batch_lock.status_code == 200
+order_detail_page = client.get("/orders/1")
+assert "关联库存流水".encode("utf-8") in order_detail_page.data
+assert "关联账目明细".encode("utf-8") in order_detail_page.data
 
 ship_wb = Workbook()
 ship_ws = ship_wb.active
