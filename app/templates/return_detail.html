@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>退货详情</h2>
+    <div class="detail-grid">
+        <div><span>快递单号</span><strong>{{ row.tracking_no }}</strong></div>
+        <div><span>状态</span><strong>{{ row.status }}</strong></div>
+        <div><span>订单号</span><strong>{{ row.order_no or "-" }}</strong></div>
+        <div><span>原始商品</span><strong>{{ row.raw_product_name or "-" }}</strong></div>
+        <div><span>原始 SKU</span><strong>{{ row.raw_sku or "-" }}</strong></div>
+        <div><span>匹配商品</span><strong>{{ row.item_name or "待匹配" }}</strong></div>
+        <div><span>数量</span><strong>{{ row.quantity }}</strong></div>
+        <div><span>客户</span><strong>{{ row.customer_name or "-" }}</strong></div>
+        <div><span>创建时间</span><strong>{{ row.created_at }}</strong></div>
+        <div><span>更新时间</span><strong>{{ row.updated_at }}</strong></div>
+    </div>
+</section>
+<section>
+    <h2>来源数据</h2>
+    <div class="table-wrap"><table><thead><tr><th>字段</th><th>值</th></tr></thead><tbody>
+    {% for key, value in payload_data.items() %}
+        <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+    {% else %}
+        <tr><td colspan="2" class="empty">暂无原始数据</td></tr>
+    {% endfor %}
+    </tbody></table></div>
+</section>
+<section>
+    <h2>售后记录</h2>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>售后单号</th><th>原订单</th><th>商品</th><th>数量</th><th>状态</th><th>备注</th></tr></thead><tbody>
+    {% for item in after_sales_rows %}
+        <tr><td>{{ item.created_at }}</td><td>{{ item.after_sale_no }}</td><td>{{ item.order_no or "-" }}</td><td>{{ item.item_name or "-" }}</td><td>{{ item.quantity }}</td><td>{{ item.status }}</td><td>{{ item.note }}</td></tr>
+    {% else %}
+        <tr><td colspan="7" class="empty">暂无售后记录</td></tr>
+    {% endfor %}
+    </tbody></table></div>
+</section>
+{% endblock %}

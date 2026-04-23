@@ -1369,6 +1369,25 @@ def list_after_sales(database_path: str, limit: int = 100) -> list[dict]:
         ]
 
 
+def list_after_sales_by_tracking(database_path: str, tracking_no: str, limit: int = 20) -> list[dict]:
+    with get_connection(database_path) as conn:
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT af.*, i.item_name, so.order_no
+                FROM after_sales af
+                LEFT JOIN items i ON i.id = af.item_id
+                LEFT JOIN sales_orders so ON so.id = af.sales_order_id
+                WHERE af.tracking_no = ?
+                ORDER BY af.created_at DESC
+                LIMIT ?
+                """,
+                (tracking_no, limit),
+            ).fetchall()
+        ]
+
+
 def purchase_suggestions(database_path: str) -> list[dict]:
     with get_connection(database_path) as conn:
         rows = conn.execute(
@@ -1583,6 +1602,20 @@ def match_return_inbound(database_path: str, return_id: int, item_id: int) -> di
         return_inbound = dict(row)
     create_after_sale_from_return(database_path, return_inbound, item["id"])
     return return_inbound
+
+
+def get_return_inbound(database_path: str, return_id: int) -> dict | None:
+    with get_connection(database_path) as conn:
+        row = conn.execute(
+            """
+            SELECT ri.*, i.item_code, i.item_name
+            FROM return_inbounds ri
+            LEFT JOIN items i ON i.id = ri.item_id
+            WHERE ri.id = ?
+            """,
+            (return_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def create_bom_line(database_path: str, form: dict) -> None:

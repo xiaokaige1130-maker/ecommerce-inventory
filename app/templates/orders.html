@@ -19,9 +19,15 @@
         <input name="customer_name" value="{{ copy_order.customer_name if copy_order else '' }}" placeholder="客户姓名">
         <select name="warehouse_id">{% for w in warehouses %}<option value="{{ w.id }}" {% if copy_order and copy_order.warehouse_id == w.id %}selected{% endif %}>{{ w.name }}</option>{% endfor %}</select>
         <input name="note" value="{{ copy_order.note if copy_order else '' }}" placeholder="备注">
-        <select name="item_id" required>{% for item in items %}<option value="{{ item.id }}" {% if copy_line and copy_line.item_id == item.id %}selected{% endif %}>{{ item.item_code }} - {{ item.item_name }}</option>{% endfor %}</select>
-        <input name="quantity" type="number" step="0.01" value="{{ copy_line.quantity if copy_line else '1' }}" placeholder="数量" required>
-        <input name="sale_price" type="number" step="0.01" value="{{ copy_line.sale_price if copy_line else '0' }}" placeholder="销售单价" required>
+        <div class="line-items">
+            {% for line in form_lines %}
+            <div class="line-item-row">
+                <select name="item_id">{% for item in items %}<option value="{{ item.id }}" {% if line.item_id == item.id %}selected{% endif %}>{{ item.item_code }} - {{ item.item_name }}</option>{% endfor %}</select>
+                <input name="quantity" type="number" step="0.01" value="{{ line.quantity }}" placeholder="数量">
+                <input name="sale_price" type="number" step="0.01" value="{{ line.price }}" placeholder="销售单价">
+            </div>
+            {% endfor %}
+        </div>
         <button>{{ "复制后新建订单" if copy_order else "新增订单" }}</button>
     </form>
     {% if copy_order %}<p class="hint"><a class="button-link" href="{{ url_for('main.orders') }}">取消复制</a></p>{% endif %}

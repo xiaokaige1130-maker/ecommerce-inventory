@@ -112,10 +112,10 @@ purchase_resp = client.post(
     "/purchase",
     data={
         "supplier_id": "1",
-        "item_id": "1",
-        "warehouse_id": "1",
-        "quantity": "10",
-        "unit_cost": "5",
+        "item_id": ["1", "1"],
+        "warehouse_id": ["1", "1"],
+        "quantity": ["10", "2"],
+        "unit_cost": ["5", "6"],
         "source_no": "PO-TEST",
     },
     follow_redirects=True,
@@ -155,10 +155,10 @@ sales_resp = client.post(
     "/sales",
     data={
         "customer_id": "2",
-        "item_id": "2",
-        "warehouse_id": "1",
-        "quantity": "2",
-        "sale_price": "99",
+        "item_id": ["2", "2"],
+        "warehouse_id": ["1", "1"],
+        "quantity": ["2", "1"],
+        "sale_price": ["99", "100"],
         "source_no": "SO-TEST",
     },
     follow_redirects=True,
@@ -174,9 +174,9 @@ order_resp = client.post(
         "customer_id": "2",
         "customer_name": "测试客户",
         "warehouse_id": "1",
-        "item_id": "2",
-        "quantity": "1",
-        "sale_price": "99",
+        "item_id": ["2", "2"],
+        "quantity": ["1", "1"],
+        "sale_price": ["99", "98"],
     },
     follow_redirects=True,
 )
@@ -303,10 +303,13 @@ assert pending_resp.get_json()["result"]["status"] == "pending_match"
 match_resp = client.post("/returns", data={"return_id": "2", "item_id": "2"}, follow_redirects=True)
 assert match_resp.status_code == 200
 assert client.get("/returns?status=matched_inbound&keyword=YT001&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
+assert client.get("/returns/1").status_code == 200
 assert client.get("/stock").status_code == 200
 assert client.get("/returns").status_code == 200
 assert client.get("/warehouse-workbench").status_code == 200
 assert client.get("/warehouse-workbench?status=shipped&keyword=WEB-TEST&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
+batch_lock = client.post("/warehouse-workbench", data={"action": "lock", "order_ids": ["2"]}, follow_redirects=True)
+assert batch_lock.status_code == 200
 for kind in ("stock", "accounts", "returns", "purchase", "sales", "orders", "settlements"):
     assert client.get(f"/export/{kind}").status_code == 200
 print("Self test passed.")

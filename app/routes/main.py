@@ -308,6 +308,24 @@ def order_detail(order_id: int):
     return render_template("order_detail.html", order=order, lines=lines)
 
 
+@main_bp.route("/returns/<int:return_id>")
+@login_required
+@roles_required("admin", "warehouse")
+def return_detail(return_id: int):
+    database_path = current_app.config["DATABASE_PATH"]
+    row = repositories.get_return_inbound(database_path, return_id)
+    if not row:
+        flash("退货记录不存在", "danger")
+        return redirect(url_for("main.returns"))
+    payload = row.get("raw_payload") or ""
+    try:
+        payload_data = __import__("json").loads(payload)
+    except Exception:
+        payload_data = {}
+    after_sales_rows = repositories.list_after_sales_by_tracking(database_path, row["tracking_no"])
+    return render_template("return_detail.html", row=row, payload_data=payload_data, after_sales_rows=after_sales_rows)
+
+
 @main_bp.route("/documents/<document_type>/<int:document_id>")
 @login_required
 @roles_required("admin", "purchase", "sales", "finance")
@@ -500,7 +518,7 @@ def purchase():
     copy_id = int(request.args.get("copy_id") or 0)
     copy_document = repositories.get_document(database_path, copy_id) if copy_id else None
     copy_lines = repositories.document_lines(database_path, copy_id) if copy_document else []
-    copy_line = copy_lines[0] if copy_lines else None
+    form_lines = _seed_form_lines(copy_lines, price_key="unit_price")
     return render_template(
         "purchase.html",
         items=repositories.list_items(database_path),
@@ -514,7 +532,7 @@ def purchase():
         date_from=date_from,
         date_to=date_to,
         copy_document=copy_document,
-        copy_line=copy_line,
+        form_lines=form_lines,
     )
 
 
@@ -548,7 +566,7 @@ def sales():
     copy_id = int(request.args.get("copy_id") or 0)
     copy_document = repositories.get_document(database_path, copy_id) if copy_id else None
     copy_lines = repositories.document_lines(database_path, copy_id) if copy_document else []
-    copy_line = copy_lines[0] if copy_lines else None
+    form_lines = _seed_form_lines(copy_lines, price_key="unit_price")
     return render_template(
         "sales.html",
         items=repositories.list_items(database_path, "finished"),
@@ -561,7 +579,7 @@ def sales():
         date_from=date_from,
         date_to=date_to,
         copy_document=copy_document,
-        copy_line=copy_line,
+        form_lines=form_lines,
     )
 
 
@@ -584,7 +602,7 @@ def orders():
     copy_id = int(request.args.get("copy_id") or 0)
     copy_order = repositories.get_sales_order(database_path, copy_id) if copy_id else None
     copy_lines = repositories.order_lines(database_path, copy_id) if copy_order else []
-    copy_line = copy_lines[0] if copy_lines else None
+    form_lines = _seed_form_lines(copy_lines, price_key="sale_price")
     return render_template(
         "orders.html",
         rows=repositories.list_sales_orders(
@@ -606,7 +624,7 @@ def orders():
         date_to=date_to,
         platforms=repositories.PLATFORMS,
         copy_order=copy_order,
-        copy_line=copy_line,
+        form_lines=form_lines,
     )
 
 
@@ -617,23 +635,33 @@ def warehouse_workbench():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
         action = str(request.form.get("action", "")).strip()
-        order_id = int(request.form.get("order_id"))
+        order_ids = request.form.getlist("order_ids")
+        target_ids = [int(value) for value in order_ids if value] or ([int(request.form.get("order_id"))] if request.form.get("order_id") else [])
+        if not target_ids:
+            flash("请先选择订单", "danger")
+            return redirect(url_for("main.warehouse_workbench"))
         try:
             if action == "lock":
-                repositories.lock_sales_order(database_path, order_id)
-                flash("订单已锁库", "success")
+                for order_id in target_ids:
+                    repositories.lock_sales_order(database_path, order_id)
+                flash(f"已锁库 {len(target_ids)} 个订单", "success")
             elif action == "ship":
-                repositories.ship_sales_order(
-                    database_path,
-                    order_id,
-                    str(request.form.get("logistics_company", "")).strip(),
-                    str(request.form.get("tracking_no", "")).strip(),
-                    session.get("username", ""),
-                )
-                flash("订单已发货并扣减库存", "success")
+                logistics_company = str(request.form.get("logistics_company", "")).strip()
+                tracking_no = str(request.form.get("tracking_no", "")).strip()
+                for idx, order_id in enumerate(target_ids):
+                    order_tracking = tracking_no if len(target_ids) == 1 else (f"{tracking_no}-{idx + 1}" if tracking_no else "")
+                    repositories.ship_sales_order(
+                        database_path,
+                        order_id,
+                        logistics_company,
+                        order_tracking,
+                        session.get("username", ""),
+                    )
+                flash(f"已发货 {len(target_ids)} 个订单", "success")
             elif action == "cancel":
-                repositories.cancel_sales_order(database_path, order_id)
-                flash("订单已取消并释放锁定库存", "success")
+                for order_id in target_ids:
+                    repositories.cancel_sales_order(database_path, order_id)
+                flash(f"已取消 {len(target_ids)} 个订单", "success")
         except Exception as exc:
             flash(f"处理失败：{exc}", "danger")
         return redirect(url_for("main.warehouse_workbench"))
@@ -854,3 +882,19 @@ def _lines_from_form(form, price_field: str) -> list[dict]:
             }
         )
     return lines
+
+
+def _seed_form_lines(lines: list[dict] | None, price_key: str, minimum: int = 3) -> list[dict]:
+    seeded = []
+    for row in lines or []:
+        seeded.append(
+            {
+                "item_id": row.get("item_id", ""),
+                "warehouse_id": row.get("warehouse_id", ""),
+                "quantity": row.get("quantity", ""),
+                "price": row.get(price_key, row.get("unit_price", "")),
+            }
+        )
+    while len(seeded) < minimum:
+        seeded.append({"item_id": "", "warehouse_id": "", "quantity": "", "price": ""})
+    return seeded

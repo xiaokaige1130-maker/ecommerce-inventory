@@ -75,6 +75,19 @@ h3 { margin: 0 0 10px; font-size: 16px; color: #334155; }
     margin-bottom: 6px;
 }
 .detail-grid strong { color: #0f3d3e; }
+.line-items {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 8px;
+}
+.line-item-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 8px;
+}
+.line-item-row.with-warehouse {
+    grid-template-columns: 2fr 1.3fr 0.8fr 1fr;
+}
 .form-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
