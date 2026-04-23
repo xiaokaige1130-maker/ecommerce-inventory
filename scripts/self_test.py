@@ -154,6 +154,25 @@ stock_seed_resp = client.post(
     follow_redirects=True,
 )
 assert stock_seed_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    stock_movement = conn.execute("SELECT id, row_version FROM stock_movements WHERE source_no = 'SEED-FINISHED'").fetchone()
+edit_stock_resp = client.post(
+    "/stock",
+    data={
+        "movement_id": str(stock_movement[0]),
+        "expected_version": str(stock_movement[1]),
+        "expected_stock_snapshot": "",
+        "movement_type": "adjust_in",
+        "item_id": "2",
+        "warehouse_id": "1",
+        "quantity": "6",
+        "unit_cost": "61",
+        "source_no": "SEED-FINISHED-EDIT",
+        "note": "更新库存流水",
+    },
+    follow_redirects=True,
+)
+assert edit_stock_resp.status_code == 200
 overdraw_resp = client.post(
     "/stock",
     data={
@@ -292,6 +311,24 @@ pay_resp = client.post(
     follow_redirects=True,
 )
 assert pay_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    payment_entry = conn.execute("SELECT id, row_version FROM account_entries WHERE source_no = 'PAY-TEST'").fetchone()
+edit_pay_resp = client.post(
+    "/accounts",
+    data={
+        "action": "payment",
+        "entry_id": str(payment_entry[0]),
+        "expected_version": str(payment_entry[1]),
+        "expected_accounts_snapshot": "",
+        "entry_type": "customer_receive",
+        "partner_id": "2",
+        "amount": "55",
+        "source_no": "PAY-TEST-EDIT",
+        "note": "更新收款",
+    },
+    follow_redirects=True,
+)
+assert edit_pay_resp.status_code == 200
 stale_account_resp = client.post(
     "/accounts",
     data={"entry_type": "customer_receive", "partner_id": "2", "amount": "10", "source_no": "PAY-STALE", "expected_accounts_snapshot": accounts_snapshot},
@@ -304,6 +341,27 @@ settlement_resp = client.post(
     follow_redirects=True,
 )
 assert settlement_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    settlement_row = conn.execute("SELECT id, row_version FROM platform_settlements WHERE settlement_no = 'SET-TEST'").fetchone()
+edit_settlement_resp = client.post(
+    "/accounts",
+    data={
+        "action": "settlement",
+        "settlement_id": str(settlement_row[0]),
+        "expected_version": str(settlement_row[1]),
+        "expected_accounts_snapshot": "",
+        "settlement_no": "SET-TEST-EDIT",
+        "platform": "测试平台",
+        "amount": "120",
+        "commission": "6",
+        "freight": "4",
+        "refund_amount": "2",
+        "settled_at": "2026-04-24",
+        "note": "更新平台对账",
+    },
+    follow_redirects=True,
+)
+assert edit_settlement_resp.status_code == 200
 assert client.get("/purchase?keyword=PO-TEST-EDIT").status_code == 200
 assert client.get("/sales?keyword=SO-TEST-EDIT").status_code == 200
 assert client.get("/purchase?source_channel=manual&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
@@ -319,7 +377,9 @@ assert "操作日志".encode("utf-8") in sales_detail.data
 assert client.get("/orders?copy_id=1").status_code == 200
 assert client.get("/purchase?copy_id=1").status_code == 200
 assert client.get("/sales?copy_id=2").status_code == 200
-assert client.get("/exceptions").status_code == 200
+exceptions_page = client.get("/exceptions")
+assert exceptions_page.status_code == 200
+assert "异常看板".encode("utf-8") in exceptions_page.data
 
 stock_page = client.get("/stock")
 stock_snapshot = re.search(rb'name="expected_stock_snapshot" value="([^"]*)"', stock_page.data).group(1).decode()
@@ -351,6 +411,10 @@ stale_stock_resp = client.post(
     follow_redirects=True,
 )
 assert "库存页面已有新流水".encode("utf-8") in stale_stock_resp.data
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    edited_stock = conn.execute("SELECT id, row_version FROM stock_movements WHERE source_no = 'SEED-FINISHED-EDIT'").fetchone()
+void_stock_resp = client.post(f"/stock/{edited_stock[0]}/action", data={"action": "void", "expected_version": str(edited_stock[1])}, follow_redirects=True)
+assert void_stock_resp.status_code == 200
 
 void_order_resp = client.post(
     "/orders",
@@ -408,6 +472,14 @@ with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
     red_sale = conn.execute("SELECT id, row_version FROM documents WHERE document_no = 'SO-RED'").fetchone()
 red_sale_action = client.post(f"/documents/sale/{red_sale[0]}/action", data={"action": "red_flush", "expected_version": str(red_sale[1])}, follow_redirects=True)
 assert red_sale_action.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    edited_payment = conn.execute("SELECT id, row_version FROM account_entries WHERE source_no = 'PAY-TEST-EDIT'").fetchone()
+void_payment_resp = client.post(f"/accounts/entries/{edited_payment[0]}/action", data={"action": "void", "expected_version": str(edited_payment[1])}, follow_redirects=True)
+assert void_payment_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    edited_settlement = conn.execute("SELECT id, row_version FROM platform_settlements WHERE settlement_no = 'SET-TEST-EDIT'").fetchone()
+void_settlement_resp = client.post(f"/accounts/settlements/{edited_settlement[0]}/action", data={"action": "void", "expected_version": str(edited_settlement[1])}, follow_redirects=True)
+assert void_settlement_resp.status_code == 200
 
 client.post(
     "/production",

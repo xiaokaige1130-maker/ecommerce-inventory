@@ -139,6 +139,7 @@ def source_channel_name(value: str) -> str:
         "purchase_red_flush": "采购红冲",
         "sale_red_flush": "销售红冲",
         "payment": "收付款",
+        "manual_adjust": "手工调整",
         "return_system": "API推送",
         "return_system_db": "系统同步",
         "return_match": "人工匹配",
@@ -520,19 +521,24 @@ def stock():
             if request.form.get("expected_stock_snapshot") and not request.form.get("force_save"):
                 if snapshots["stock"] != str(request.form.get("expected_stock_snapshot") or ""):
                     raise ValueError("库存页面已有新流水，请刷新确认后再保存")
-            repositories.create_stock_movement(
-                database_path,
-                str(request.form.get("movement_type", "")).strip(),
-                int(request.form.get("item_id")),
-                int(request.form.get("warehouse_id")),
-                float(request.form.get("quantity")),
-                float(request.form.get("unit_cost") or 0),
-                source_type="manual",
-                source_no=str(request.form.get("source_no", "")).strip(),
-                note=str(request.form.get("note", "")).strip(),
-                created_by=session.get("username", ""),
-            )
-            flash("库存流水已保存", "success")
+            movement_id = int(request.form.get("movement_id") or 0)
+            if movement_id:
+                repositories.update_manual_stock_movement(database_path, movement_id, request.form, session.get("username", ""))
+                flash("库存流水已更新", "success")
+            else:
+                repositories.create_stock_movement(
+                    database_path,
+                    str(request.form.get("movement_type", "")).strip(),
+                    int(request.form.get("item_id")),
+                    int(request.form.get("warehouse_id")),
+                    float(request.form.get("quantity")),
+                    float(request.form.get("unit_cost") or 0),
+                    source_type="manual",
+                    source_no=str(request.form.get("source_no", "")).strip(),
+                    note=str(request.form.get("note", "")).strip(),
+                    created_by=session.get("username", ""),
+                )
+                flash("库存流水已保存", "success")
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.stock"))
@@ -540,6 +546,8 @@ def stock():
     movement_type = str(request.args.get("movement_type", "")).strip()
     date_from = str(request.args.get("date_from", "")).strip()
     date_to = str(request.args.get("date_to", "")).strip()
+    edit_id = int(request.args.get("edit_id") or 0)
+    editing_movement = repositories.get_stock_movement(database_path, edit_id) if edit_id else None
     return render_template(
         "stock.html",
         stock_rows=repositories.list_stock(database_path),
@@ -552,7 +560,29 @@ def stock():
         date_from=date_from,
         date_to=date_to,
         stock_snapshot=repositories.latest_snapshot_tokens(database_path)["stock"],
+        editing_movement=editing_movement,
     )
+
+
+@main_bp.route("/stock/<int:movement_id>/action", methods=["POST"])
+@login_required
+@roles_required("admin", "warehouse")
+def stock_action(movement_id: int):
+    try:
+        action = str(request.form.get("action", "")).strip()
+        if action == "void":
+            repositories.void_manual_stock_movement(
+                current_app.config["DATABASE_PATH"],
+                movement_id,
+                request.form.get("expected_version"),
+                session.get("username", ""),
+            )
+            flash("库存流水已作废", "success")
+        else:
+            flash("未知操作", "danger")
+    except Exception as exc:
+        flash(f"操作失败：{exc}", "danger")
+    return redirect(request.referrer or url_for("main.stock"))
 
 
 @main_bp.route("/purchase", methods=["GET", "POST"])
@@ -839,11 +869,21 @@ def accounts():
         action = str(request.form.get("action", "payment")).strip()
         try:
             if action == "settlement":
-                repositories.save_platform_settlement(database_path, request.form)
-                flash("平台对账已保存", "success")
+                settlement_id = int(request.form.get("settlement_id") or 0)
+                if settlement_id:
+                    repositories.update_platform_settlement(database_path, settlement_id, request.form, session.get("username", ""))
+                    flash("平台对账已更新", "success")
+                else:
+                    repositories.save_platform_settlement(database_path, request.form)
+                    flash("平台对账已保存", "success")
             else:
-                repositories.receive_payment(database_path, request.form, session.get("username", ""))
-                flash("收付款已保存", "success")
+                entry_id = int(request.form.get("entry_id") or 0)
+                if entry_id:
+                    repositories.update_payment_entry(database_path, entry_id, request.form, session.get("username", ""))
+                    flash("收付款已更新", "success")
+                else:
+                    repositories.receive_payment(database_path, request.form, session.get("username", ""))
+                    flash("收付款已保存", "success")
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.accounts"))
@@ -852,6 +892,8 @@ def accounts():
     source_type = str(request.args.get("source_type", "")).strip()
     date_from = str(request.args.get("date_from", "")).strip()
     date_to = str(request.args.get("date_to", "")).strip()
+    edit_entry_id = int(request.args.get("edit_entry_id") or 0)
+    edit_settlement_id = int(request.args.get("edit_settlement_id") or 0)
     return render_template(
         "accounts.html",
         rows=repositories.account_summary(database_path),
@@ -864,7 +906,41 @@ def accounts():
         date_from=date_from,
         date_to=date_to,
         accounts_snapshot=repositories.latest_snapshot_tokens(database_path)["accounts"],
+        editing_entry=repositories.get_account_entry(database_path, edit_entry_id) if edit_entry_id else None,
+        editing_settlement=repositories.get_platform_settlement(database_path, edit_settlement_id) if edit_settlement_id else None,
     )
+
+
+@main_bp.route("/accounts/entries/<int:entry_id>/action", methods=["POST"])
+@login_required
+@roles_required("admin", "finance")
+def account_entry_action(entry_id: int):
+    try:
+        action = str(request.form.get("action", "")).strip()
+        if action == "void":
+            repositories.void_payment_entry(current_app.config["DATABASE_PATH"], entry_id, request.form.get("expected_version"), session.get("username", ""))
+            flash("收付款已作废", "success")
+        else:
+            flash("未知操作", "danger")
+    except Exception as exc:
+        flash(f"操作失败：{exc}", "danger")
+    return redirect(request.referrer or url_for("main.accounts"))
+
+
+@main_bp.route("/accounts/settlements/<int:settlement_id>/action", methods=["POST"])
+@login_required
+@roles_required("admin", "finance")
+def settlement_action(settlement_id: int):
+    try:
+        action = str(request.form.get("action", "")).strip()
+        if action == "void":
+            repositories.void_platform_settlement(current_app.config["DATABASE_PATH"], settlement_id, request.form.get("expected_version"), session.get("username", ""))
+            flash("平台对账已作废", "success")
+        else:
+            flash("未知操作", "danger")
+    except Exception as exc:
+        flash(f"操作失败：{exc}", "danger")
+    return redirect(request.referrer or url_for("main.accounts"))
 
 
 @main_bp.route("/returns", methods=["GET", "POST"])

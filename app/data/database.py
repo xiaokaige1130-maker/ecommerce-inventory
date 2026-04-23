@@ -84,6 +84,11 @@ CREATE TABLE IF NOT EXISTS stock_movements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     movement_no TEXT NOT NULL UNIQUE,
     movement_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    row_version INTEGER NOT NULL DEFAULT 0,
+    reversed_movement_no TEXT,
+    voided_at TEXT,
+    voided_by TEXT,
     item_id INTEGER NOT NULL,
     warehouse_id INTEGER NOT NULL,
     quantity REAL NOT NULL,
@@ -95,6 +100,7 @@ CREATE TABLE IF NOT EXISTS stock_movements (
     note TEXT,
     created_by TEXT,
     created_at TEXT NOT NULL,
+    updated_at TEXT,
     FOREIGN KEY(item_id) REFERENCES items(id),
     FOREIGN KEY(warehouse_id) REFERENCES warehouses(id),
     FOREIGN KEY(document_id) REFERENCES documents(id),
@@ -210,6 +216,11 @@ CREATE TABLE IF NOT EXISTS after_sales (
 CREATE TABLE IF NOT EXISTS platform_settlements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     settlement_no TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'active',
+    row_version INTEGER NOT NULL DEFAULT 0,
+    reversed_settlement_no TEXT,
+    voided_at TEXT,
+    voided_by TEXT,
     platform TEXT,
     amount REAL NOT NULL DEFAULT 0,
     commission REAL NOT NULL DEFAULT 0,
@@ -218,7 +229,8 @@ CREATE TABLE IF NOT EXISTS platform_settlements (
     net_amount REAL NOT NULL DEFAULT 0,
     settled_at TEXT,
     note TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    updated_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS document_lines (
@@ -238,6 +250,11 @@ CREATE TABLE IF NOT EXISTS document_lines (
 CREATE TABLE IF NOT EXISTS account_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_no TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'active',
+    row_version INTEGER NOT NULL DEFAULT 0,
+    reversed_entry_no TEXT,
+    voided_at TEXT,
+    voided_by TEXT,
     partner_id INTEGER NOT NULL,
     account_type TEXT NOT NULL,
     direction TEXT NOT NULL,
@@ -247,6 +264,7 @@ CREATE TABLE IF NOT EXISTS account_entries (
     note TEXT,
     created_by TEXT,
     created_at TEXT NOT NULL,
+    updated_at TEXT,
     FOREIGN KEY(partner_id) REFERENCES partners(id)
 );
 
@@ -323,7 +341,15 @@ def init_db(database_path: str) -> None:
 def _run_migrations(conn: sqlite3.Connection) -> None:
     migrations = {
         "users": {"role": "TEXT NOT NULL DEFAULT 'admin'"},
-        "stock_movements": {"document_id": "INTEGER"},
+        "stock_movements": {
+            "document_id": "INTEGER",
+            "status": "TEXT NOT NULL DEFAULT 'active'",
+            "row_version": "INTEGER NOT NULL DEFAULT 0",
+            "reversed_movement_no": "TEXT",
+            "voided_at": "TEXT",
+            "voided_by": "TEXT",
+            "updated_at": "TEXT",
+        },
         "sales_orders": {
             "source_channel": "TEXT NOT NULL DEFAULT 'manual'",
             "row_version": "INTEGER NOT NULL DEFAULT 0",
@@ -344,6 +370,22 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             "reversed_document_no": "TEXT",
             "voided_at": "TEXT",
             "voided_by": "TEXT",
+        },
+        "account_entries": {
+            "status": "TEXT NOT NULL DEFAULT 'active'",
+            "row_version": "INTEGER NOT NULL DEFAULT 0",
+            "reversed_entry_no": "TEXT",
+            "voided_at": "TEXT",
+            "voided_by": "TEXT",
+            "updated_at": "TEXT",
+        },
+        "platform_settlements": {
+            "status": "TEXT NOT NULL DEFAULT 'active'",
+            "row_version": "INTEGER NOT NULL DEFAULT 0",
+            "reversed_settlement_no": "TEXT",
+            "voided_at": "TEXT",
+            "voided_by": "TEXT",
+            "updated_at": "TEXT",
         },
     }
     conn.execute(

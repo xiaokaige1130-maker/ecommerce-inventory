@@ -194,7 +194,7 @@ def dashboard_stats(database_path: str) -> dict:
                 FROM (
                     SELECT i.id, i.safety_stock, COALESCE(SUM(sm.quantity), 0) AS qty
                     FROM items i
-                    LEFT JOIN stock_movements sm ON sm.item_id = i.id
+                    LEFT JOIN stock_movements sm ON sm.item_id = i.id AND sm.status = 'active'
                     WHERE i.is_active = 1
                     GROUP BY i.id
                 ) t
@@ -202,10 +202,10 @@ def dashboard_stats(database_path: str) -> dict:
                 """
             ).fetchone()["c"],
             "receivable": conn.execute(
-                "SELECT COALESCE(SUM(CASE WHEN direction='increase' THEN amount ELSE -amount END), 0) AS c FROM account_entries WHERE account_type='receivable'"
+                "SELECT COALESCE(SUM(CASE WHEN direction='increase' THEN amount ELSE -amount END), 0) AS c FROM account_entries WHERE account_type='receivable' AND status='active'"
             ).fetchone()["c"],
             "payable": conn.execute(
-                "SELECT COALESCE(SUM(CASE WHEN direction='increase' THEN amount ELSE -amount END), 0) AS c FROM account_entries WHERE account_type='payable'"
+                "SELECT COALESCE(SUM(CASE WHEN direction='increase' THEN amount ELSE -amount END), 0) AS c FROM account_entries WHERE account_type='payable' AND status='active'"
             ).fetchone()["c"],
             "pending_returns": conn.execute("SELECT COUNT(*) AS c FROM return_inbounds WHERE status='pending_match'").fetchone()["c"],
             "pending_orders": conn.execute("SELECT COUNT(*) AS c FROM sales_orders WHERE status IN ('pending_review', 'locked')").fetchone()["c"],
@@ -223,6 +223,7 @@ def owner_dashboard(database_path: str, return_database_path: str = "") -> dict:
                 COALESCE(SUM(-sm.quantity * sm.unit_cost), 0) AS cost_amount
             FROM stock_movements sm
             WHERE sm.movement_type = 'sale_out'
+              AND sm.status = 'active'
               AND datetime(sm.created_at) >= datetime(?)
             """,
             (quarter_start,),
@@ -244,6 +245,7 @@ def owner_dashboard(database_path: str, return_database_path: str = "") -> dict:
                 FROM stock_movements sm
                 JOIN items i ON i.id = sm.item_id
                 WHERE sm.movement_type = 'sale_out'
+                  AND sm.status = 'active'
                   AND datetime(sm.created_at) >= datetime(?)
                 GROUP BY i.id
                 ORDER BY qty DESC, cost_amount DESC
@@ -258,7 +260,7 @@ def owner_dashboard(database_path: str, return_database_path: str = "") -> dict:
                 """
                 SELECT i.item_code, i.item_name, i.item_type, i.safety_stock, COALESCE(SUM(sm.quantity), 0) AS stock_qty
                 FROM items i
-                LEFT JOIN stock_movements sm ON sm.item_id = i.id
+                LEFT JOIN stock_movements sm ON sm.item_id = i.id AND sm.status = 'active'
                 WHERE i.is_active = 1 AND i.safety_stock > 0
                 GROUP BY i.id
                 HAVING stock_qty <= i.safety_stock
@@ -671,8 +673,8 @@ def create_stock_movement(
             """
             INSERT INTO stock_movements (
                 movement_no, movement_type, item_id, warehouse_id, quantity, unit_cost,
-                source_type, source_no, document_id, partner_id, note, created_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_type, source_no, document_id, partner_id, note, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 movement_no,
@@ -687,6 +689,7 @@ def create_stock_movement(
                 partner_id,
                 note,
                 created_by,
+                ts,
                 ts,
             ),
         )
@@ -705,6 +708,91 @@ def create_stock_movement(
         return dict(row)
 
 
+def get_stock_movement(database_path: str, movement_id: int) -> dict | None:
+    with get_connection(database_path) as conn:
+        row = conn.execute(
+            """
+            SELECT sm.*, i.item_code, i.item_name, w.name AS warehouse_name
+            FROM stock_movements sm
+            JOIN items i ON i.id = sm.item_id
+            JOIN warehouses w ON w.id = sm.warehouse_id
+            WHERE sm.id = ?
+            """,
+            (movement_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_manual_stock_movement(database_path: str, movement_id: int, form: dict, updated_by: str = "") -> dict:
+    ts = now()
+    with get_connection(database_path) as conn:
+        movement = conn.execute("SELECT * FROM stock_movements WHERE id = ?", (movement_id,)).fetchone()
+        _require_row_version(movement, form.get("expected_version"), "库存流水")
+        if movement["status"] != "active":
+            raise ValueError("当前状态不能编辑库存流水")
+        if movement["source_type"] != "manual" or movement["movement_type"] not in {"adjust_in", "adjust_out"}:
+            raise ValueError("只有手工盘盈/盘亏可以编辑")
+        movement_type = str(form.get("movement_type", "")).strip()
+        if movement_type not in {"adjust_in", "adjust_out"}:
+            raise ValueError("只能编辑为盘盈或盘亏")
+        item_id = int(form.get("item_id"))
+        warehouse_id = int(form.get("warehouse_id"))
+        quantity = abs(_num(form.get("quantity")))
+        if quantity <= 0:
+            raise ValueError("数量必须大于 0")
+        signed_qty = quantity if movement_type == "adjust_in" else -quantity
+        current_qty = _stock_quantity(conn, item_id, warehouse_id)
+        available_with_restore = current_qty - float(movement["quantity"])
+        if available_with_restore + signed_qty < -0.000001:
+            raise ValueError("编辑后库存会变成负数")
+        conn.execute(
+            """
+            UPDATE stock_movements
+            SET movement_type = ?, item_id = ?, warehouse_id = ?, quantity = ?, unit_cost = ?, source_no = ?, note = ?,
+                updated_at = ?, row_version = row_version + 1
+            WHERE id = ?
+            """,
+            (
+                movement_type,
+                item_id,
+                warehouse_id,
+                signed_qty,
+                _num(form.get("unit_cost")),
+                str(form.get("source_no", "")).strip(),
+                str(form.get("note", "")).strip(),
+                ts,
+                movement_id,
+            ),
+        )
+        _log_operation(conn, "stock_movement", movement_id, "update", "编辑库存流水", f"调整为 {movement_type} {signed_qty:g}", updated_by)
+        conn.commit()
+    return get_stock_movement(database_path, movement_id) or {}
+
+
+def void_manual_stock_movement(database_path: str, movement_id: int, expected_version: int | str | None, created_by: str = "") -> None:
+    ts = now()
+    with get_connection(database_path) as conn:
+        movement = conn.execute("SELECT * FROM stock_movements WHERE id = ?", (movement_id,)).fetchone()
+        _require_row_version(movement, expected_version, "库存流水")
+        if movement["status"] != "active":
+            raise ValueError("库存流水已失效")
+        if movement["source_type"] != "manual" or movement["movement_type"] not in {"adjust_in", "adjust_out"}:
+            raise ValueError("只有手工盘盈/盘亏可以作废")
+        if float(movement["quantity"]) > 0 and _stock_quantity(conn, int(movement["item_id"]), int(movement["warehouse_id"])) - float(movement["quantity"]) < -0.000001:
+            raise ValueError("作废后库存会变成负数")
+        reverse_no = f"VOID-{movement['movement_no']}"
+        conn.execute(
+            """
+            UPDATE stock_movements
+            SET status = 'voided', updated_at = ?, row_version = row_version + 1, reversed_movement_no = ?, voided_at = ?, voided_by = ?
+            WHERE id = ?
+            """,
+            (ts, reverse_no, ts, created_by, movement_id),
+        )
+        _log_operation(conn, "stock_movement", movement_id, "void", "作废库存流水", f"冲销号：{reverse_no}", created_by)
+        conn.commit()
+
+
 def _stock_quantity(conn, item_id: int, warehouse_id: int) -> float:
     row = conn.execute(
         """
@@ -712,6 +800,7 @@ def _stock_quantity(conn, item_id: int, warehouse_id: int) -> float:
         FROM stock_movements
         WHERE item_id = ?
           AND warehouse_id = ?
+          AND status = 'active'
         """,
         (item_id, warehouse_id),
     ).fetchone()
@@ -889,10 +978,10 @@ def create_account_entry(
         conn.execute(
             """
             INSERT INTO account_entries (
-                entry_no, partner_id, account_type, direction, amount, source_type, source_no, note, created_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                entry_no, partner_id, account_type, direction, amount, source_type, source_no, note, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (entry_no, partner_id, account_type, direction, abs(amount), source_type, source_no, note, created_by, ts),
+            (entry_no, partner_id, account_type, direction, abs(amount), source_type, source_no, note, created_by, ts, ts),
         )
         row = conn.execute("SELECT id FROM account_entries WHERE entry_no = ?", (entry_no,)).fetchone()
         _log_operation(
@@ -904,6 +993,83 @@ def create_account_entry(
             f"{account_type}/{direction} {abs(amount):.2f}，来源：{source_no or '-'}",
             created_by,
         )
+        conn.commit()
+
+
+def get_account_entry(database_path: str, entry_id: int) -> dict | None:
+    with get_connection(database_path) as conn:
+        row = conn.execute(
+            """
+            SELECT ae.*, p.name AS partner_name, p.partner_type
+            FROM account_entries ae
+            JOIN partners p ON p.id = ae.partner_id
+            WHERE ae.id = ?
+            """,
+            (entry_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_payment_entry(database_path: str, entry_id: int, form: dict, updated_by: str = "") -> dict:
+    ts = now()
+    with get_connection(database_path) as conn:
+        entry = conn.execute("SELECT * FROM account_entries WHERE id = ?", (entry_id,)).fetchone()
+        _require_row_version(entry, form.get("expected_version"), "账目明细")
+        if entry["status"] != "active":
+            raise ValueError("当前状态不能编辑账目")
+        if entry["source_type"] != "payment":
+            raise ValueError("只有手工收付款可以编辑")
+        amount = _num(form.get("amount"))
+        if amount <= 0:
+            raise ValueError("金额必须大于 0")
+        entry_type = str(form.get("entry_type", "")).strip()
+        if entry_type == "customer_receive":
+            account_type, direction = "receivable", "decrease"
+        elif entry_type == "supplier_pay":
+            account_type, direction = "payable", "decrease"
+        else:
+            raise ValueError("无效收付款类型")
+        conn.execute(
+            """
+            UPDATE account_entries
+            SET partner_id = ?, account_type = ?, direction = ?, amount = ?, source_no = ?, note = ?, updated_at = ?, row_version = row_version + 1
+            WHERE id = ?
+            """,
+            (
+                int(form.get("partner_id")),
+                account_type,
+                direction,
+                abs(amount),
+                str(form.get("source_no", "")).strip(),
+                str(form.get("note", "")).strip() or ("客户收款" if entry_type == "customer_receive" else "供应商付款"),
+                ts,
+                entry_id,
+            ),
+        )
+        _log_operation(conn, "account_entry", entry_id, "update", "编辑收付款", f"金额：{amount:.2f}", updated_by)
+        conn.commit()
+    return get_account_entry(database_path, entry_id) or {}
+
+
+def void_payment_entry(database_path: str, entry_id: int, expected_version: int | str | None, created_by: str = "") -> None:
+    ts = now()
+    with get_connection(database_path) as conn:
+        entry = conn.execute("SELECT * FROM account_entries WHERE id = ?", (entry_id,)).fetchone()
+        _require_row_version(entry, expected_version, "账目明细")
+        if entry["status"] != "active":
+            raise ValueError("账目明细已失效")
+        if entry["source_type"] != "payment":
+            raise ValueError("只有手工收付款可以作废")
+        reverse_no = f"VOID-{entry['entry_no']}"
+        conn.execute(
+            """
+            UPDATE account_entries
+            SET status = 'voided', updated_at = ?, row_version = row_version + 1, reversed_entry_no = ?, voided_at = ?, voided_by = ?
+            WHERE id = ?
+            """,
+            (ts, reverse_no, ts, created_by, entry_id),
+        )
+        _log_operation(conn, "account_entry", entry_id, "void", "作废收付款", f"冲销号：{reverse_no}", created_by)
         conn.commit()
 
 
@@ -1101,7 +1267,7 @@ def list_stock(database_path: str) -> list[dict]:
                    ), 0) AS locked_qty
             FROM items i
             LEFT JOIN warehouses w ON w.id = i.default_warehouse_id
-            LEFT JOIN stock_movements sm ON sm.item_id = i.id
+            LEFT JOIN stock_movements sm ON sm.item_id = i.id AND sm.status = 'active'
             WHERE i.is_active = 1
             GROUP BY i.id
             ORDER BY i.item_type, i.item_name
@@ -1132,6 +1298,7 @@ def recent_movements(
         WHERE 1 = 1
     """
     params: list = []
+    sql += " AND sm.status = 'active'"
     clean_keyword = str(keyword).strip()
     clean_type = str(movement_type).strip()
     if clean_type:
@@ -1160,7 +1327,7 @@ def account_summary(database_path: str) -> list[dict]:
             SELECT p.*, 
                 COALESCE(SUM(CASE WHEN ae.direction = 'increase' THEN ae.amount ELSE -ae.amount END), 0) AS balance
             FROM partners p
-            LEFT JOIN account_entries ae ON ae.partner_id = p.id
+            LEFT JOIN account_entries ae ON ae.partner_id = p.id AND ae.status = 'active'
             WHERE p.is_active = 1
             GROUP BY p.id
             ORDER BY p.partner_type, p.name
@@ -1257,6 +1424,7 @@ def list_account_entries(
         WHERE 1 = 1
     """
     params: list = []
+    sql += " AND ae.status = 'active'"
     if partner_id:
         sql += " AND ae.partner_id = ?"
         params.append(partner_id)
@@ -1879,11 +2047,12 @@ def purchase_suggestions(database_path: str) -> list[dict]:
                    COALESCE((
                        SELECT SUM(-sm2.quantity) FROM stock_movements sm2
                        WHERE sm2.item_id = i.id AND sm2.movement_type = 'sale_out'
+                         AND sm2.status = 'active'
                          AND datetime(sm2.created_at) >= datetime('now', '-30 days', 'localtime')
                    ), 0) AS sales_30
             FROM items i
             LEFT JOIN partners p ON p.id = i.supplier_id
-            LEFT JOIN stock_movements sm ON sm.item_id = i.id
+            LEFT JOIN stock_movements sm ON sm.item_id = i.id AND sm.status = 'active'
             WHERE i.is_active = 1 AND i.safety_stock > 0
             GROUP BY i.id
             HAVING stock_qty <= safety_stock OR sales_30 > 0
@@ -1917,8 +2086,8 @@ def save_platform_settlement(database_path: str, form: dict) -> None:
         conn.execute(
             """
             INSERT INTO platform_settlements (
-                settlement_no, platform, amount, commission, freight, refund_amount, net_amount, settled_at, note, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                settlement_no, platform, amount, commission, freight, refund_amount, net_amount, settled_at, note, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(form.get("settlement_no", "")).strip() or f"SET{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
@@ -1931,6 +2100,7 @@ def save_platform_settlement(database_path: str, form: dict) -> None:
                 str(form.get("settled_at", "")).strip(),
                 str(form.get("note", "")).strip(),
                 ts,
+                ts,
             ),
         )
         settlement = conn.execute("SELECT id, settlement_no FROM platform_settlements ORDER BY id DESC LIMIT 1").fetchone()
@@ -1938,9 +2108,83 @@ def save_platform_settlement(database_path: str, form: dict) -> None:
         conn.commit()
 
 
+def get_platform_settlement(database_path: str, settlement_id: int) -> dict | None:
+    with get_connection(database_path) as conn:
+        row = conn.execute("SELECT * FROM platform_settlements WHERE id = ?", (settlement_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_platform_settlement(database_path: str, settlement_id: int, form: dict, updated_by: str = "") -> dict:
+    amount = _num(form.get("amount"))
+    commission = _num(form.get("commission"))
+    freight = _num(form.get("freight"))
+    refund_amount = _num(form.get("refund_amount"))
+    net_amount = amount - commission - freight - refund_amount
+    ts = now()
+    with get_connection(database_path) as conn:
+        settlement = conn.execute("SELECT * FROM platform_settlements WHERE id = ?", (settlement_id,)).fetchone()
+        _require_row_version(settlement, form.get("expected_version"), "平台对账")
+        if settlement["status"] != "active":
+            raise ValueError("当前状态不能编辑平台对账")
+        settlement_no = str(form.get("settlement_no", "")).strip() or settlement["settlement_no"]
+        duplicate = conn.execute("SELECT id FROM platform_settlements WHERE settlement_no = ? AND id <> ?", (settlement_no, settlement_id)).fetchone()
+        if duplicate:
+            raise ValueError("对账单号已存在")
+        conn.execute(
+            """
+            UPDATE platform_settlements
+            SET settlement_no = ?, platform = ?, amount = ?, commission = ?, freight = ?, refund_amount = ?, net_amount = ?,
+                settled_at = ?, note = ?, updated_at = ?, row_version = row_version + 1
+            WHERE id = ?
+            """,
+            (
+                settlement_no,
+                str(form.get("platform", "")).strip(),
+                amount,
+                commission,
+                freight,
+                refund_amount,
+                net_amount,
+                str(form.get("settled_at", "")).strip(),
+                str(form.get("note", "")).strip(),
+                ts,
+                settlement_id,
+            ),
+        )
+        _log_operation(conn, "settlement", settlement_id, "update", "编辑平台对账", f"对账单号：{settlement_no}，净额：{net_amount:.2f}", updated_by)
+        conn.commit()
+    return get_platform_settlement(database_path, settlement_id) or {}
+
+
+def void_platform_settlement(database_path: str, settlement_id: int, expected_version: int | str | None, created_by: str = "") -> None:
+    ts = now()
+    with get_connection(database_path) as conn:
+        settlement = conn.execute("SELECT * FROM platform_settlements WHERE id = ?", (settlement_id,)).fetchone()
+        _require_row_version(settlement, expected_version, "平台对账")
+        if settlement["status"] != "active":
+            raise ValueError("平台对账已失效")
+        reverse_no = f"VOID-{settlement['settlement_no']}"
+        conn.execute(
+            """
+            UPDATE platform_settlements
+            SET status = 'voided', updated_at = ?, row_version = row_version + 1, reversed_settlement_no = ?, voided_at = ?, voided_by = ?
+            WHERE id = ?
+            """,
+            (ts, reverse_no, ts, created_by, settlement_id),
+        )
+        _log_operation(conn, "settlement", settlement_id, "void", "作废平台对账", f"冲销号：{reverse_no}", created_by)
+        conn.commit()
+
+
 def list_platform_settlements(database_path: str, limit: int = 100) -> list[dict]:
     with get_connection(database_path) as conn:
-        return [dict(row) for row in conn.execute("SELECT * FROM platform_settlements ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()]
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM platform_settlements WHERE status = 'active' ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        ]
 
 
 def receive_payment(database_path: str, form: dict, created_by: str = "") -> None:
@@ -2238,7 +2482,7 @@ def exception_dashboard(database_path: str) -> dict:
                 """
                 SELECT i.item_code, i.item_name, COALESCE(SUM(sm.quantity), 0) AS stock_qty
                 FROM items i
-                LEFT JOIN stock_movements sm ON sm.item_id = i.id
+                LEFT JOIN stock_movements sm ON sm.item_id = i.id AND sm.status = 'active'
                 WHERE i.is_active = 1
                 GROUP BY i.id
                 HAVING stock_qty < 0
@@ -2256,7 +2500,7 @@ def exception_dashboard(database_path: str) -> dict:
                            COALESCE((
                                SELECT SUM(CASE WHEN ae.direction='increase' THEN ae.amount ELSE -ae.amount END)
                                FROM account_entries ae
-                               WHERE ae.source_type = 'sales_order' AND ae.source_no = so.order_no
+                               WHERE ae.source_type = 'sales_order' AND ae.source_no = so.order_no AND ae.status = 'active'
                            ), 0) AS receivable_balance
                     FROM sales_orders so
                     LEFT JOIN partners p ON p.id = so.customer_id
@@ -2292,12 +2536,12 @@ def exception_dashboard(database_path: str) -> dict:
                            COALESCE((
                                SELECT SUM(CASE WHEN ae.direction='increase' THEN ae.amount ELSE -ae.amount END)
                                FROM account_entries ae
-                               WHERE ae.source_type = d.document_type AND ae.source_no = d.document_no
+                               WHERE ae.source_type = d.document_type AND ae.source_no = d.document_no AND ae.status = 'active'
                            ), 0) AS account_total,
                            COALESCE((
                                SELECT SUM(ABS(sm.quantity) * sm.unit_cost)
                                FROM stock_movements sm
-                               WHERE sm.document_id = d.id
+                               WHERE sm.document_id = d.id AND sm.status = 'active'
                            ), 0) AS movement_total
                     FROM documents d
                     LEFT JOIN partners p ON p.id = d.partner_id
