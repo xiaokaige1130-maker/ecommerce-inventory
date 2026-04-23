@@ -97,6 +97,12 @@ h3 { margin: 0 0 10px; font-size: 16px; color: #334155; }
     align-items: center;
     margin-bottom: 12px;
 }
+.toolbar form {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.toolbar form button { width: auto; }
 input, select, button {
     width: 100%;
     min-height: 38px;

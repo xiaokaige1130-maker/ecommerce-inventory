@@ -2,6 +2,7 @@
 {% block content %}
 <section>
     <h2>采购中心</h2>
+    <p class="hint">本页用于采购入库，保存后会同步增加库存并生成供应商应付。建议先看采购建议，再录入采购单。</p>
     <form class="form-grid compact" method="post">
         <select name="supplier_id" required>{% for p in suppliers %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
         <select name="item_id" required>{% for item in items %}<option value="{{ item.id }}">{{ item.item_code }} - {{ item.item_name }}</option>{% endfor %}</select>

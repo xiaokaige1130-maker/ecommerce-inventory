@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from functools import wraps
+import secrets
 
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from urllib.parse import urlsplit
 
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, send_file, session, url_for
 
@@ -11,6 +13,61 @@ from ..data import repositories
 
 
 main_bp = Blueprint("main", __name__)
+
+ROLE_NAV_ITEMS = {
+    "admin": [
+        ("main.home", "首页"),
+        ("main.items", "商品中心"),
+        ("main.orders", "订单中心"),
+        ("main.sales", "销售单"),
+        ("main.warehouse_workbench", "仓库作业"),
+        ("main.stock", "库存中心"),
+        ("main.purchase", "采购中心"),
+        ("main.production", "生产组装"),
+        ("main.partners", "客户供应商"),
+        ("main.accounts", "财务对账"),
+        ("main.returns", "售后退货"),
+        ("main.users", "账号"),
+    ],
+    "boss": [
+        ("main.home", "首页"),
+    ],
+    "warehouse": [
+        ("main.home", "首页"),
+        ("main.items", "商品中心"),
+        ("main.warehouse_workbench", "仓库作业"),
+        ("main.stock", "库存中心"),
+        ("main.production", "生产组装"),
+        ("main.returns", "售后退货"),
+    ],
+    "purchase": [
+        ("main.home", "首页"),
+        ("main.items", "商品中心"),
+        ("main.purchase", "采购中心"),
+        ("main.partners", "客户供应商"),
+    ],
+    "sales": [
+        ("main.home", "首页"),
+        ("main.orders", "订单中心"),
+        ("main.sales", "销售单"),
+        ("main.partners", "客户供应商"),
+    ],
+    "finance": [
+        ("main.home", "首页"),
+        ("main.partners", "客户供应商"),
+        ("main.accounts", "财务对账"),
+    ],
+    "staff": [
+        ("main.home", "首页"),
+    ],
+}
+
+IMPORT_KIND_META = {
+    "items": {"label": "商品资料", "endpoint": "main.items"},
+    "orders": {"label": "订单", "endpoint": "main.orders"},
+    "purchase": {"label": "采购入库", "endpoint": "main.purchase"},
+    "stock": {"label": "库存调整", "endpoint": "main.stock"},
+}
 
 
 @main_bp.app_template_filter("item_type_name")
@@ -97,9 +154,45 @@ def roles_required(*roles: str):
     return decorator
 
 
+def _safe_next_url(target: str | None) -> str:
+    fallback = url_for("main.home")
+    if not target:
+        return fallback
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc:
+        return fallback
+    if not target.startswith("/"):
+        return fallback
+    return target
+
+
+def _import_meta(kind: str) -> dict:
+    meta = IMPORT_KIND_META.get(kind)
+    if not meta:
+        raise ValueError("未知导入类型")
+    return meta
+
+
+def _import_back_url(kind: str) -> str:
+    return url_for(_import_meta(kind)["endpoint"])
+
+
+def _clear_import_draft() -> None:
+    draft = session.pop("import_draft", None)
+    if draft and draft.get("tmp_path"):
+        Path(draft["tmp_path"]).unlink(missing_ok=True)
+
+
+@main_bp.app_context_processor
+def inject_navigation():
+    role = session.get("role") or "staff"
+    nav_items = ROLE_NAV_ITEMS.get(role, ROLE_NAV_ITEMS["staff"])
+    return {"nav_items": nav_items, "current_role": role, "current_role_label": role_name(role)}
+
+
 @main_bp.route("/login", methods=["GET", "POST"])
 def login():
-    next_url = request.args.get("next") or request.form.get("next") or url_for("main.home")
+    next_url = _safe_next_url(request.args.get("next") or request.form.get("next"))
     if request.method == "POST":
         user = repositories.verify_user(
             current_app.config["DATABASE_PATH"],
@@ -125,12 +218,64 @@ def logout():
 @main_bp.route("/")
 @login_required
 def home():
+    database_path = current_app.config["DATABASE_PATH"]
+    role = session.get("role") or "staff"
     dashboard = repositories.owner_dashboard(
-        current_app.config["DATABASE_PATH"],
+        database_path,
         current_app.config["RETURN_SYSTEM_DATABASE_PATH"],
     )
-    movements = repositories.recent_movements(current_app.config["DATABASE_PATH"], limit=10)
-    return render_template("home.html", dashboard=dashboard, stats=dashboard["stats"], movements=movements)
+    context = {
+        "home_role": role,
+        "dashboard": dashboard,
+        "stats": dashboard["stats"],
+        "movements": repositories.recent_movements(database_path, limit=10),
+    }
+    if role in {"admin", "boss"}:
+        context["home_mode"] = "owner"
+    elif role == "warehouse":
+        orders = repositories.list_sales_orders(database_path, "", 100)
+        stock_rows = repositories.list_stock(database_path)
+        returns = repositories.list_return_inbounds(database_path)
+        context.update(
+            home_mode="warehouse",
+            warehouse_focus={
+                "pending_review": sum(1 for row in orders if row["status"] == "pending_review"),
+                "locked": sum(1 for row in orders if row["status"] == "locked"),
+                "pending_returns": sum(1 for row in returns if row["status"] in {"pending_match", "external_abnormal"}),
+                "low_stock": sum(1 for row in stock_rows if (row.get("available_qty") or 0) <= (row.get("safety_stock") or 0) and (row.get("safety_stock") or 0) > 0),
+            },
+            warehouse_orders=orders[:8],
+            warehouse_low_stock=[row for row in stock_rows if (row.get("available_qty") or 0) <= (row.get("safety_stock") or 0) and (row.get("safety_stock") or 0) > 0][:8],
+            warehouse_returns=returns[:8],
+        )
+    elif role == "purchase":
+        suggestions = repositories.purchase_suggestions(database_path)
+        context.update(
+            home_mode="purchase",
+            purchase_focus={
+                "needs_buy": sum(1 for row in suggestions if (row.get("suggest_qty") or 0) > 0),
+                "suppliers": len(repositories.list_partners(database_path, "supplier")),
+                "recent_docs": len(repositories.list_documents(database_path, "purchase", 10)),
+            },
+            purchase_suggestions=suggestions[:8],
+            purchase_documents=repositories.list_documents(database_path, "purchase", 8),
+        )
+    elif role == "sales":
+        orders = repositories.list_sales_orders(database_path, "", 100)
+        context.update(
+            home_mode="sales",
+            sales_focus={
+                "pending_review": sum(1 for row in orders if row["status"] == "pending_review"),
+                "locked": sum(1 for row in orders if row["status"] == "locked"),
+                "shipped": sum(1 for row in orders if row["status"] == "shipped"),
+                "customers": len(repositories.list_partners(database_path, "customer")),
+            },
+            sales_orders=orders[:8],
+            sales_documents=repositories.list_documents(database_path, "sale", 8),
+        )
+    else:
+        context["home_mode"] = "staff"
+    return render_template("home.html", **context)
 
 
 @main_bp.route("/template/<kind>")
@@ -143,30 +288,66 @@ def template(kind: str):
 @main_bp.route("/import/<kind>", methods=["POST"])
 @login_required
 def import_data(kind: str):
+    back_url = _import_back_url(kind)
+    if request.form.get("confirm_import") == "1":
+        draft = session.get("import_draft") or {}
+        if draft.get("token") != request.form.get("preview_token") or draft.get("kind") != kind:
+            flash("导入预检已失效，请重新上传文件", "danger")
+            _clear_import_draft()
+            return redirect(back_url)
+        tmp_path = str(draft.get("tmp_path") or "")
+        if not tmp_path or not Path(tmp_path).exists():
+            flash("导入临时文件不存在，请重新上传", "danger")
+            _clear_import_draft()
+            return redirect(back_url)
+        try:
+            result = repositories.import_excel(
+                current_app.config["DATABASE_PATH"],
+                tmp_path,
+                kind,
+                session.get("username", ""),
+            )
+            flash(f"导入完成：成功 {result['created']} 行，跳过 {result['skipped']} 行", "success" if not result["errors"] else "danger")
+            if result["errors"]:
+                flash("；".join(result["errors"][:5]), "danger")
+        except Exception as exc:
+            flash(f"导入失败：{exc}", "danger")
+        finally:
+            _clear_import_draft()
+        return redirect(back_url)
+
     upload = request.files.get("file")
     if not upload or not upload.filename:
         flash("请选择要导入的 Excel 文件", "danger")
-        return redirect(request.referrer or url_for("main.home"))
+        return redirect(back_url)
+    _clear_import_draft()
     suffix = Path(upload.filename).suffix or ".xlsx"
     with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         upload.save(tmp.name)
         tmp_path = tmp.name
     try:
-        result = repositories.import_excel(
+        preview = repositories.import_excel(
             current_app.config["DATABASE_PATH"],
             tmp_path,
             kind,
             session.get("username", ""),
+            dry_run=True,
         )
-        message = f"导入完成：成功 {result['created']} 行，跳过 {result['skipped']} 行"
-        if result["errors"]:
-            message += "；" + "；".join(result["errors"][:5])
-        flash(message, "success" if not result["errors"] else "danger")
+        token = secrets.token_urlsafe(16)
+        session["import_draft"] = {"token": token, "kind": kind, "tmp_path": tmp_path}
+        return render_template(
+            "import_preview.html",
+            kind=kind,
+            import_label=_import_meta(kind)["label"],
+            back_url=back_url,
+            preview=preview,
+            preview_token=token,
+            filename=upload.filename,
+        )
     except Exception as exc:
-        flash(f"导入失败：{exc}", "danger")
-    finally:
         Path(tmp_path).unlink(missing_ok=True)
-    return redirect(request.referrer or url_for("main.home"))
+        flash(f"导入失败：{exc}", "danger")
+        return redirect(back_url)
 
 
 @main_bp.route("/items", methods=["GET", "POST"])
@@ -395,7 +576,6 @@ def accounts():
     )
 
 
-@main_bp.route("/returns")
 @main_bp.route("/returns", methods=["GET", "POST"])
 @login_required
 @roles_required("admin", "warehouse")

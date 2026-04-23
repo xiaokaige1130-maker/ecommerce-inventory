@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>{{ import_label }}导入预检</h2>
+    <p class="hint">文件：{{ filename }}。先检查再落库，避免重复导入和格式错误直接写入数据库。</p>
+    <div class="grid stats">
+        <div><strong>{{ preview.rows }}</strong><span>有效数据行</span></div>
+        <div><strong>{{ preview.ready }}</strong><span>可导入</span></div>
+        <div><strong>{{ preview.duplicates }}</strong><span>重复行</span></div>
+        <div><strong>{{ preview.skipped }}</strong><span>需跳过</span></div>
+    </div>
+    {% if preview.errors %}
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>预检提示</th></tr></thead>
+            <tbody>
+            {% for error in preview.errors[:20] %}
+                <tr><td>{{ error }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    <div class="toolbar">
+        <a class="button-link" href="{{ back_url }}">返回页面</a>
+        {% if preview.ready > 0 %}
+        <form method="post" action="{{ url_for('main.import_data', kind=kind) }}">
+            <input type="hidden" name="confirm_import" value="1">
+            <input type="hidden" name="preview_token" value="{{ preview_token }}">
+            <button type="submit">确认导入 {{ preview.ready }} 行</button>
+        </form>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

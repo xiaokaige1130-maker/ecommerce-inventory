@@ -2,6 +2,7 @@
 {% block content %}
 <section>
     <h2>销售出库</h2>
+    <p class="hint">这里用于手工创建销售单并立即出库。平台订单请先在“订单中心”录入，再到“仓库作业”发货。</p>
     <form class="form-grid compact" method="post">
         <select name="customer_id" required>{% for p in customers %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
         <select name="item_id" required>{% for item in items %}<option value="{{ item.id }}">{{ item.item_code }} - {{ item.item_name }}</option>{% endfor %}</select>

@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
+{% if home_mode == "owner" %}
 <section class="grid stats">
     <div><strong>{{ stats["items"] }}</strong><span>商品资料</span></div>
-    <div><strong>{{ "%.0f"|format(dashboard.quarter_sales_qty) }}</strong><span>季度销售数据</span></div>
-    <div><strong>{{ "%.2f"|format(dashboard.quarter_sales_amount) }}</strong><span>季度销售金额</span></div>
+    <div><strong>{{ "%.0f"|format(dashboard.quarter_sales_qty) }}</strong><span>季度销量</span></div>
+    <div><strong>{{ "%.2f"|format(dashboard.quarter_sales_revenue) }}</strong><span>季度销售收入</span></div>
+    <div><strong>{{ "%.2f"|format(dashboard.quarter_sales_cost) }}</strong><span>季度出库成本</span></div>
+    <div><strong>{{ "%.2f"|format(dashboard.quarter_sales_gross_profit) }}</strong><span>季度毛利</span></div>
     <div><strong>{{ dashboard.quarter_order_count }}</strong><span>季度订单</span></div>
-    <div><strong>{{ dashboard.return_system.quarter_total }}</strong><span>季度退货数据</span></div>
-    <div><strong>{{ dashboard.return_system.quarter_abnormal }}</strong><span>季度退货异常</span></div>
     <div><strong>{{ "%.1f"|format(dashboard.return_rate) }}%</strong><span>退货/销量比</span></div>
 </section>
 <section class="grid stats">
@@ -20,59 +21,128 @@
 <section class="dashboard-grid">
     <div>
         <h2>季度卖得好</h2>
-        <div class="table-wrap">
-        <table>
-            <thead><tr><th>排名</th><th>商品</th><th>销量</th><th>销售额</th></tr></thead>
-            <tbody>
-            {% for row in dashboard.top_sales %}
-                <tr><td>{{ loop.index }}</td><td>{{ row.item_name }}</td><td>{{ "%.0f"|format(row.qty) }}</td><td>{{ "%.2f"|format(row.amount) }}</td></tr>
-            {% else %}<tr><td colspan="4" class="empty">暂无销售数据</td></tr>{% endfor %}
-            </tbody>
-        </table>
-        </div>
+        <div class="table-wrap"><table><thead><tr><th>排名</th><th>商品</th><th>销量</th><th>出库成本</th></tr></thead><tbody>
+        {% for row in dashboard.top_sales %}
+            <tr><td>{{ loop.index }}</td><td>{{ row.item_name }}</td><td>{{ "%.0f"|format(row.qty) }}</td><td>{{ "%.2f"|format(row.cost_amount) }}</td></tr>
+        {% else %}<tr><td colspan="4" class="empty">暂无销售数据</td></tr>{% endfor %}
+        </tbody></table></div>
     </div>
     <div>
         <h2>季度退得多</h2>
-        <div class="table-wrap">
-        <table>
-            <thead><tr><th>排名</th><th>商品</th><th>退货件数</th></tr></thead>
-            <tbody>
-            {% for row in dashboard.return_system.top_returns %}
-                <tr><td>{{ loop.index }}</td><td>{{ row.product_name }}</td><td>{{ row.qty }}</td></tr>
-            {% else %}<tr><td colspan="3" class="empty">暂无退货数据</td></tr>{% endfor %}
-            </tbody>
-        </table>
-        </div>
+        <div class="table-wrap"><table><thead><tr><th>排名</th><th>商品</th><th>退货件数</th></tr></thead><tbody>
+        {% for row in dashboard.return_system.top_returns %}
+            <tr><td>{{ loop.index }}</td><td>{{ row.product_name }}</td><td>{{ row.qty }}</td></tr>
+        {% else %}<tr><td colspan="3" class="empty">暂无退货数据</td></tr>{% endfor %}
+        </tbody></table></div>
     </div>
 </section>
 <section class="dashboard-grid">
     <div>
         <h2>低库存预警</h2>
-        <div class="table-wrap">
-        <table>
-            <thead><tr><th>类型</th><th>编号</th><th>名称</th><th>库存</th><th>安全库存</th></tr></thead>
-            <tbody>
-            {% for row in dashboard.low_stock %}
-                <tr><td>{{ row.item_type|item_type_name }}</td><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td class="neg">{{ row.stock_qty }}</td><td>{{ row.safety_stock }}</td></tr>
-            {% else %}<tr><td colspan="5" class="empty">暂无低库存</td></tr>{% endfor %}
-            </tbody>
-        </table>
-        </div>
+        <div class="table-wrap"><table><thead><tr><th>类型</th><th>编号</th><th>名称</th><th>库存</th><th>安全库存</th></tr></thead><tbody>
+        {% for row in dashboard.low_stock %}
+            <tr><td>{{ row.item_type|item_type_name }}</td><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td class="neg">{{ row.stock_qty }}</td><td>{{ row.safety_stock }}</td></tr>
+        {% else %}<tr><td colspan="5" class="empty">暂无低库存</td></tr>{% endfor %}
+        </tbody></table></div>
     </div>
     <div>
         <h2>最近退货入库</h2>
-        <div class="table-wrap">
-        <table>
-            <thead><tr><th>时间</th><th>快递单号</th><th>商品</th><th>状态</th><th>异常</th></tr></thead>
-            <tbody>
-            {% for row in dashboard.return_system.recent_returns %}
-                <tr><td>{{ row.first_scanned_at }}</td><td>{{ row.barcode }}</td><td>{{ row.product_name or "-" }}</td><td>{{ row.match_status }}</td><td>{{ row.anomaly_note or "" }}</td></tr>
-            {% else %}<tr><td colspan="5" class="empty">暂无退货记录</td></tr>{% endfor %}
-            </tbody>
-        </table>
-        </div>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>快递单号</th><th>商品</th><th>状态</th><th>异常</th></tr></thead><tbody>
+        {% for row in dashboard.return_system.recent_returns %}
+            <tr><td>{{ row.first_scanned_at }}</td><td>{{ row.barcode }}</td><td>{{ row.product_name or "-" }}</td><td>{{ row.match_status }}</td><td>{{ row.anomaly_note or "" }}</td></tr>
+        {% else %}<tr><td colspan="5" class="empty">暂无退货记录</td></tr>{% endfor %}
+        </tbody></table></div>
     </div>
 </section>
+{% elif home_mode == "warehouse" %}
+<section class="grid stats">
+    <div><strong>{{ warehouse_focus.pending_review }}</strong><span>待锁库订单</span></div>
+    <div><strong>{{ warehouse_focus.locked }}</strong><span>待发货订单</span></div>
+    <div><strong>{{ warehouse_focus.pending_returns }}</strong><span>待处理退货</span></div>
+    <div><strong>{{ warehouse_focus.low_stock }}</strong><span>缺货预警</span></div>
+</section>
+<section class="dashboard-grid">
+    <div>
+        <h2>待处理订单</h2>
+        <div class="table-wrap"><table><thead><tr><th>订单号</th><th>状态</th><th>平台</th><th>客户</th><th>金额</th></tr></thead><tbody>
+        {% for row in warehouse_orders %}
+            <tr><td>{{ row.order_no }}</td><td>{{ row.status|order_status_name }}</td><td>{{ row.platform }}</td><td>{{ row.partner_name or row.customer_name }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td></tr>
+        {% else %}<tr><td colspan="5" class="empty">暂无订单</td></tr>{% endfor %}
+        </tbody></table></div>
+    </div>
+    <div>
+        <h2>待处理退货</h2>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>快递单号</th><th>状态</th><th>商品</th></tr></thead><tbody>
+        {% for row in warehouse_returns %}
+            <tr><td>{{ row.created_at }}</td><td>{{ row.tracking_no }}</td><td>{{ row.status }}</td><td>{{ row.raw_product_name }}</td></tr>
+        {% else %}<tr><td colspan="4" class="empty">暂无退货</td></tr>{% endfor %}
+        </tbody></table></div>
+    </div>
+</section>
+<section>
+    <h2>低库存预警</h2>
+    <div class="table-wrap"><table><thead><tr><th>编号</th><th>名称</th><th>可用库存</th><th>安全库存</th></tr></thead><tbody>
+    {% for row in warehouse_low_stock %}
+        <tr><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td class="neg">{{ row.available_qty }}</td><td>{{ row.safety_stock }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">暂无预警</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+{% elif home_mode == "purchase" %}
+<section class="grid stats">
+    <div><strong>{{ purchase_focus.needs_buy }}</strong><span>建议采购商品</span></div>
+    <div><strong>{{ purchase_focus.suppliers }}</strong><span>供应商数量</span></div>
+    <div><strong>{{ purchase_focus.recent_docs }}</strong><span>最近采购单</span></div>
+</section>
+<section class="dashboard-grid">
+    <div>
+        <h2>采购建议</h2>
+        <div class="table-wrap"><table><thead><tr><th>编号</th><th>名称</th><th>库存</th><th>建议采购</th><th>供应商</th></tr></thead><tbody>
+        {% for row in purchase_suggestions %}
+            <tr><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td>{{ row.stock_qty }}</td><td class="{{ 'neg' if row.suggest_qty > 0 else '' }}">{{ row.suggest_qty }}</td><td>{{ row.supplier_name or "-" }}</td></tr>
+        {% else %}<tr><td colspan="5" class="empty">暂无建议</td></tr>{% endfor %}
+        </tbody></table></div>
+    </div>
+    <div>
+        <h2>最近采购单</h2>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>单号</th><th>供应商</th><th>金额</th></tr></thead><tbody>
+        {% for row in purchase_documents %}
+            <tr><td>{{ row.created_at }}</td><td>{{ row.document_no }}</td><td>{{ row.partner_name }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td></tr>
+        {% else %}<tr><td colspan="4" class="empty">暂无采购单</td></tr>{% endfor %}
+        </tbody></table></div>
+    </div>
+</section>
+{% elif home_mode == "sales" %}
+<section class="grid stats">
+    <div><strong>{{ sales_focus.pending_review }}</strong><span>待仓库处理</span></div>
+    <div><strong>{{ sales_focus.locked }}</strong><span>已锁库</span></div>
+    <div><strong>{{ sales_focus.shipped }}</strong><span>已发货</span></div>
+    <div><strong>{{ sales_focus.customers }}</strong><span>客户数量</span></div>
+</section>
+<section class="dashboard-grid">
+    <div>
+        <h2>最近订单</h2>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>订单号</th><th>状态</th><th>客户</th><th>金额</th></tr></thead><tbody>
+        {% for row in sales_orders %}
+            <tr><td>{{ row.created_at }}</td><td>{{ row.order_no }}</td><td>{{ row.status|order_status_name }}</td><td>{{ row.partner_name or row.customer_name }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td></tr>
+        {% else %}<tr><td colspan="5" class="empty">暂无订单</td></tr>{% endfor %}
+        </tbody></table></div>
+    </div>
+    <div>
+        <h2>最近销售单</h2>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>单号</th><th>客户</th><th>金额</th></tr></thead><tbody>
+        {% for row in sales_documents %}
+            <tr><td>{{ row.created_at }}</td><td>{{ row.document_no }}</td><td>{{ row.partner_name }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td></tr>
+        {% else %}<tr><td colspan="4" class="empty">暂无销售单</td></tr>{% endfor %}
+        </tbody></table></div>
+    </div>
+</section>
+{% else %}
+<section class="grid stats">
+    <div><strong>{{ stats["pending_orders"] }}</strong><span>待处理订单</span></div>
+    <div><strong>{{ stats["pending_returns"] }}</strong><span>待匹配退货</span></div>
+    <div><strong>{{ stats["low_stock"] }}</strong><span>低库存预警</span></div>
+</section>
+{% endif %}
 <section>
     <h2>最近库存流水</h2>
     {% include "_movement_table.html" %}

@@ -2,6 +2,7 @@
 {% block content %}
 <section>
     <h2>订单中心</h2>
+    <p class="hint">这里录入和查询平台订单，不直接扣减库存。订单进入仓库作业后再锁库、发货。</p>
     <div class="platform-strip">
         {% for platform in platforms %}<span>{{ platform }}</span>{% endfor %}
     </div>

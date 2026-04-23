@@ -12,19 +12,14 @@
             <div>
                 <h1>{{ config.APP_NAME }}</h1>
                 <p>{{ config.APP_SUBTITLE }}</p>
+                {% if session.get("logged_in") %}
+                <p>当前角色：{{ current_role_label }}</p>
+                {% endif %}
             </div>
             <nav>
-                <a href="{{ url_for('main.home') }}">首页</a>
-                <a href="{{ url_for('main.items') }}">商品中心</a>
-                <a href="{{ url_for('main.orders') }}">订单中心</a>
-                <a href="{{ url_for('main.warehouse_workbench') }}">出库发货</a>
-                <a href="{{ url_for('main.stock') }}">库存中心</a>
-                <a href="{{ url_for('main.purchase') }}">采购中心</a>
-                <a href="{{ url_for('main.production') }}">生产组装</a>
-                <a href="{{ url_for('main.partners') }}">客户供应商</a>
-                <a href="{{ url_for('main.accounts') }}">财务对账</a>
-                <a href="{{ url_for('main.returns') }}">售后退货</a>
-                <a href="{{ url_for('main.users') }}">账号</a>
+                {% for endpoint, label in nav_items %}
+                <a href="{{ url_for(endpoint) }}">{{ label }}</a>
+                {% endfor %}
                 {% if session.get("logged_in") %}<a href="{{ url_for('main.logout') }}">退出</a>{% endif %}
             </nav>
         </div>

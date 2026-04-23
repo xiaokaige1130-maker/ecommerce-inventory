@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -29,6 +30,9 @@ app = create_app()
 client = app.test_client()
 
 assert client.get("/login").status_code == 200
+evil_login = client.post("/login?next=https://example.com/phish", data={"username": "admin", "password": "admin123"}, follow_redirects=False)
+assert evil_login.status_code == 302
+assert evil_login.headers["Location"].endswith("/")
 resp = client.post("/login", data={"username": "admin", "password": "admin123"}, follow_redirects=True)
 assert resp.status_code == 200
 
@@ -164,9 +168,18 @@ import_resp = client.post(
     "/import/orders",
     data={"file": (buf, "orders.xlsx")},
     content_type="multipart/form-data",
-    follow_redirects=True,
+    follow_redirects=False,
 )
 assert import_resp.status_code == 200
+assert "导入预检".encode("utf-8") in import_resp.data
+preview_token = re.search(rb'name="preview_token" value="([^"]+)"', import_resp.data)
+assert preview_token
+confirm_resp = client.post(
+    "/import/orders",
+    data={"confirm_import": "1", "preview_token": preview_token.group(1).decode()},
+    follow_redirects=True,
+)
+assert confirm_resp.status_code == 200
 lock_resp = client.post("/warehouse-workbench", data={"action": "lock", "order_id": "1"}, follow_redirects=True)
 assert lock_resp.status_code == 200
 ship_resp = client.post(
@@ -175,6 +188,8 @@ ship_resp = client.post(
     follow_redirects=True,
 )
 assert ship_resp.status_code == 200
+cancel_after_ship = client.post("/warehouse-workbench", data={"action": "cancel", "order_id": "1"}, follow_redirects=True)
+assert "当前状态不能取消".encode("utf-8") in cancel_after_ship.data
 
 pay_resp = client.post(
     "/accounts",
@@ -218,6 +233,9 @@ client.post(
 client.get("/logout", follow_redirects=True)
 staff_login = client.post("/login", data={"username": "staff1", "password": "staffpass"}, follow_redirects=True)
 assert staff_login.status_code == 200
+assert "订单中心".encode("utf-8") not in staff_login.data
+assert "财务对账".encode("utf-8") not in staff_login.data
+assert "首页".encode("utf-8") in staff_login.data
 forbidden_accounts = client.get("/accounts", follow_redirects=True)
 assert "没有权限".encode("utf-8") in forbidden_accounts.data
 client.get("/logout", follow_redirects=True)

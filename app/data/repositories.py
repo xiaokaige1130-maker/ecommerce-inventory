@@ -21,6 +21,13 @@ ITEM_TYPES = {
 
 PLATFORMS = ["拼多多", "淘宝", "京东", "抖音", "快手", "小红书", "线下"]
 
+IMPORT_KIND_LABELS = {
+    "items": "商品资料",
+    "orders": "订单",
+    "purchase": "采购入库",
+    "stock": "库存调整",
+}
+
 
 def now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -138,11 +145,11 @@ def owner_dashboard(database_path: str, return_database_path: str = "") -> dict:
     current = dashboard_stats(database_path)
     quarter_start = _quarter_start()
     with get_connection(database_path) as conn:
-        sales = conn.execute(
+        sales_cost = conn.execute(
             """
             SELECT
                 COALESCE(SUM(-sm.quantity), 0) AS qty,
-                COALESCE(SUM(-sm.quantity * sm.unit_cost), 0) AS amount
+                COALESCE(SUM(-sm.quantity * sm.unit_cost), 0) AS cost_amount
             FROM stock_movements sm
             WHERE sm.movement_type = 'sale_out'
               AND datetime(sm.created_at) >= datetime(?)
@@ -162,13 +169,13 @@ def owner_dashboard(database_path: str, return_database_path: str = "") -> dict:
             for row in conn.execute(
                 """
                 SELECT i.item_code, i.item_name, COALESCE(SUM(-sm.quantity), 0) AS qty,
-                       COALESCE(SUM(-sm.quantity * sm.unit_cost), 0) AS amount
+                       COALESCE(SUM(-sm.quantity * sm.unit_cost), 0) AS cost_amount
                 FROM stock_movements sm
                 JOIN items i ON i.id = sm.item_id
                 WHERE sm.movement_type = 'sale_out'
                   AND datetime(sm.created_at) >= datetime(?)
                 GROUP BY i.id
-                ORDER BY qty DESC, amount DESC
+                ORDER BY qty DESC, cost_amount DESC
                 LIMIT 10
                 """,
                 (quarter_start,),
@@ -191,14 +198,19 @@ def owner_dashboard(database_path: str, return_database_path: str = "") -> dict:
         ]
 
     return_data = _return_dashboard(return_database_path, quarter_start)
-    sales_qty = float(sales["qty"] or 0)
+    sales_qty = float(sales_cost["qty"] or 0)
+    sales_revenue = float(order_stats["amount"] or 0)
+    sales_cost_amount = float(sales_cost["cost_amount"] or 0)
     return_qty = float(return_data["quarter_total"] or 0)
     return_rate = (return_qty / sales_qty * 100) if sales_qty else 0
     return {
         "stats": current,
         "quarter_start": quarter_start[:10],
         "quarter_sales_qty": sales_qty,
-        "quarter_sales_amount": float(order_stats["amount"] or sales["amount"] or 0),
+        "quarter_sales_amount": sales_revenue,
+        "quarter_sales_revenue": sales_revenue,
+        "quarter_sales_cost": sales_cost_amount,
+        "quarter_sales_gross_profit": sales_revenue - sales_cost_amount,
         "quarter_order_count": int(order_stats["orders"] or 0),
         "top_sales": top_sales,
         "low_stock": low_stock,
@@ -377,6 +389,9 @@ def save_item(database_path: str, form: dict) -> dict:
     if not payload["item_code"] or not payload["item_name"] or payload["item_type"] not in ITEM_TYPES:
         raise ValueError("编号、名称、类型不能为空")
     with get_connection(database_path) as conn:
+        existing = conn.execute("SELECT id FROM items WHERE item_code = ?", (payload["item_code"],)).fetchone()
+        if existing and (not item_id or existing["id"] != item_id):
+            raise ValueError("商品编号已存在")
         if item_id:
             payload["id"] = item_id
             conn.execute(
@@ -430,11 +445,17 @@ def default_warehouse_id(database_path: str) -> int:
 def save_warehouse(database_path: str, name: str, note: str = "") -> None:
     ts = now()
     with get_connection(database_path) as conn:
-        conn.execute(
-            "INSERT INTO warehouses (name, note, created_at, updated_at) VALUES (?, ?, ?, ?)",
-            (name.strip(), note.strip(), ts, ts),
-        )
-        conn.commit()
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("仓库名称不能为空")
+        try:
+            conn.execute(
+                "INSERT INTO warehouses (name, note, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (clean_name, note.strip(), ts, ts),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("仓库名称已存在") from exc
 
 
 def list_locations(database_path: str, warehouse_id: int | None = None) -> list[dict]:
@@ -460,14 +481,17 @@ def save_location(database_path: str, form: dict) -> None:
         raise ValueError("货位不能为空")
     ts = now()
     with get_connection(database_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO locations (warehouse_id, location_code, note, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (warehouse_id, location_code, str(form.get("note", "")).strip(), ts, ts),
-        )
-        conn.commit()
+        try:
+            conn.execute(
+                """
+                INSERT INTO locations (warehouse_id, location_code, note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (warehouse_id, location_code, str(form.get("note", "")).strip(), ts, ts),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("该仓库下货位编码已存在") from exc
 
 
 def list_partners(database_path: str, partner_type: str = "") -> list[dict]:
@@ -488,23 +512,27 @@ def save_partner(database_path: str, form: dict) -> None:
         raise ValueError("伙伴类型和名称不能为空")
     ts = now()
     with get_connection(database_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO partners (partner_type, name, phone, contact_name, address, note, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                partner_type,
-                name,
-                str(form.get("phone", "")).strip(),
-                str(form.get("contact_name", "")).strip(),
-                str(form.get("address", "")).strip(),
-                str(form.get("note", "")).strip(),
-                ts,
-                ts,
-            ),
-        )
-        conn.commit()
+        try:
+            conn.execute(
+                """
+                INSERT INTO partners (partner_type, name, phone, contact_name, address, note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    partner_type,
+                    name,
+                    str(form.get("phone", "")).strip(),
+                    str(form.get("contact_name", "")).strip(),
+                    str(form.get("address", "")).strip(),
+                    str(form.get("note", "")).strip(),
+                    ts,
+                    ts,
+                ),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            label = "客户" if partner_type == "customer" else "供应商"
+            raise ValueError(f"{label}名称已存在") from exc
 
 
 def create_stock_movement(
@@ -610,6 +638,13 @@ def create_document(
     document_no = source_no or f"{prefix}{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
     total_amount = sum(abs(float(row["quantity"])) * float(row["unit_price"]) for row in lines)
     with get_connection(database_path) as conn:
+        if source_no:
+            existing = conn.execute(
+                "SELECT id FROM documents WHERE document_type = ? AND document_no = ?",
+                (document_type, document_no),
+            ).fetchone()
+            if existing:
+                raise ValueError("单据号已存在")
         if document_type == "sale":
             required: dict[tuple[int, int], float] = {}
             for line in lines:
@@ -825,6 +860,9 @@ def create_sales_order(database_path: str, form: dict, created_by: str = "") -> 
     ts = now()
     warehouse_id = int(form.get("warehouse_id") or default_warehouse_id(database_path))
     with get_connection(database_path) as conn:
+        existing = conn.execute("SELECT id FROM sales_orders WHERE order_no = ?", (order_no,)).fetchone()
+        if existing:
+            raise ValueError("订单号已存在")
         cur = conn.execute(
             """
             INSERT INTO sales_orders (
@@ -945,7 +983,7 @@ def ship_sales_order(database_path: str, order_id: int, logistics_company: str =
             line["item_id"],
             order["warehouse_id"],
             line["quantity"],
-            line["sale_price"],
+            item.get("cost_price") or 0 if item else 0,
             source_type="sales_order",
             source_no=order["order_no"],
             partner_id=order["customer_id"],
@@ -983,6 +1021,11 @@ def ship_sales_order(database_path: str, order_id: int, logistics_company: str =
 def cancel_sales_order(database_path: str, order_id: int) -> None:
     ts = now()
     with get_connection(database_path) as conn:
+        order = conn.execute("SELECT status FROM sales_orders WHERE id = ?", (order_id,)).fetchone()
+        if not order:
+            raise ValueError("订单不存在")
+        if order["status"] not in {"pending_review", "locked"}:
+            raise ValueError("当前状态不能取消")
         conn.execute(
             "UPDATE stock_locks SET status='released', released_at=? WHERE source_type='sales_order' AND source_id=? AND status='locked'",
             (ts, order_id),
@@ -1064,6 +1107,7 @@ def sync_return_system_records(database_path: str, return_database_path: str) ->
         product_name = str(row.get("product_name") or row.get("registered_product_name") or "").strip()
         customer_name = str(row.get("customer_name") or row.get("registered_customer_name") or "").strip()
         order_no = str(row.get("registered_order_no") or "").strip()
+        quantity = _return_row_quantity(row)
         item = find_finished_item(database_path, name=product_name)
         status = "matched_inbound" if item and row.get("match_status") == "normal_inbound" else "pending_match"
         if row.get("match_status") == "abnormal_inbound":
@@ -1099,7 +1143,7 @@ def sync_return_system_records(database_path: str, return_database_path: str) ->
                 "return_in",
                 item["id"],
                 item["default_warehouse_id"] or default_warehouse_id(database_path),
-                1,
+                quantity,
                 item.get("cost_price") or 0,
                 source_type="return_system_db",
                 source_no=tracking_no,
@@ -1112,7 +1156,7 @@ def sync_return_system_records(database_path: str, return_database_path: str) ->
                 INSERT INTO return_inbounds (
                     tracking_no, order_no, item_id, raw_product_name, raw_sku, customer_name, quantity,
                     status, stock_movement_id, raw_payload, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     tracking_no,
@@ -1121,6 +1165,7 @@ def sync_return_system_records(database_path: str, return_database_path: str) ->
                     product_name,
                     "",
                     customer_name,
+                    quantity,
                     status,
                     movement["id"] if movement else None,
                     json.dumps(row, ensure_ascii=False),
@@ -1494,33 +1539,39 @@ def create_import_template(export_dir: str, kind: str) -> str:
     return str(path)
 
 
-def import_excel(database_path: str, file_path: str, kind: str, created_by: str = "") -> dict:
+def import_excel(database_path: str, file_path: str, kind: str, created_by: str = "", dry_run: bool = False) -> dict:
     wb = load_workbook(file_path, data_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(min_row=2, values_only=True))
-    result = {"created": 0, "skipped": 0, "errors": []}
+    result = {"rows": 0, "ready": 0, "created": 0, "skipped": 0, "duplicates": 0, "errors": []}
     for idx, row in enumerate(rows, start=2):
         if not row or not any(cell not in (None, "") for cell in row):
             continue
+        result["rows"] += 1
         try:
             if kind == "orders":
-                _import_order_row(database_path, row, created_by)
+                _import_order_row(database_path, row, created_by, dry_run=dry_run)
             elif kind == "items":
-                _import_item_row(database_path, row)
+                _import_item_row(database_path, row, dry_run=dry_run)
             elif kind == "purchase":
-                _import_purchase_row(database_path, row, created_by)
+                _import_purchase_row(database_path, row, created_by, dry_run=dry_run)
             elif kind == "stock":
-                _import_stock_row(database_path, row, created_by)
+                _import_stock_row(database_path, row, created_by, dry_run=dry_run)
             else:
                 raise ValueError("未知导入类型")
-            result["created"] += 1
+            if dry_run:
+                result["ready"] += 1
+            else:
+                result["created"] += 1
         except Exception as exc:
             result["skipped"] += 1
+            if _is_duplicate_message(str(exc)):
+                result["duplicates"] += 1
             result["errors"].append(f"第{idx}行：{exc}")
     return result
 
 
-def _import_order_row(database_path: str, row: tuple, created_by: str) -> None:
+def _import_order_row(database_path: str, row: tuple, created_by: str, dry_run: bool = False) -> None:
     platform, shop, order_no, sku, item_name, qty, price, customer_name, logistics, tracking, note = (list(row) + [""] * 11)[:11]
     if not order_no:
         raise ValueError("订单号不能为空")
@@ -1530,6 +1581,8 @@ def _import_order_row(database_path: str, row: tuple, created_by: str) -> None:
     item = find_item_for_import(database_path, str(sku or ""), str(item_name or ""))
     if not item:
         raise ValueError("找不到商品，请先导入商品资料")
+    if dry_run:
+        return
     create_sales_order(
         database_path,
         {
@@ -1554,41 +1607,59 @@ def _import_order_row(database_path: str, row: tuple, created_by: str) -> None:
             conn.commit()
 
 
-def _import_item_row(database_path: str, row: tuple) -> None:
+def _import_item_row(database_path: str, row: tuple, dry_run: bool = False) -> None:
     type_name, code, name, sku, platform_sku, barcode, spec, unit, supplier_name, safety, purchase, cost, sale, lead_days = (list(row) + [""] * 14)[:14]
     type_map = {v: k for k, v in ITEM_TYPES.items()}
     item_type = type_map.get(str(type_name).strip(), str(type_name or "").strip())
     supplier_id = None
     if supplier_name:
-        supplier_id = _ensure_partner(database_path, "supplier", str(supplier_name).strip())
+        if dry_run:
+            supplier_id = _find_partner_id(database_path, "supplier", str(supplier_name).strip())
+        else:
+            supplier_id = _ensure_partner(database_path, "supplier", str(supplier_name).strip())
+    payload = {
+        "item_type": item_type,
+        "item_code": code,
+        "item_name": name,
+        "sku": sku,
+        "platform_sku": platform_sku,
+        "barcode": barcode,
+        "spec": spec,
+        "unit": unit or "件",
+        "supplier_id": supplier_id or "",
+        "safety_stock": safety or 0,
+        "purchase_price": purchase or 0,
+        "cost_price": cost or 0,
+        "sale_price": sale or 0,
+        "lead_days": lead_days or 0,
+        "is_sellable": "1" if item_type == "finished" else "0",
+    }
+    if dry_run:
+        save_item_preview(database_path, payload)
+        return
     save_item(
         database_path,
-        {
-            "item_type": item_type,
-            "item_code": code,
-            "item_name": name,
-            "sku": sku,
-            "platform_sku": platform_sku,
-            "barcode": barcode,
-            "spec": spec,
-            "unit": unit or "件",
-            "supplier_id": supplier_id or "",
-            "safety_stock": safety or 0,
-            "purchase_price": purchase or 0,
-            "cost_price": cost or 0,
-            "sale_price": sale or 0,
-            "lead_days": lead_days or 0,
-            "is_sellable": "1" if item_type == "finished" else "0",
-        },
+        payload,
     )
 
 
-def _import_purchase_row(database_path: str, row: tuple, created_by: str) -> None:
+def _import_purchase_row(database_path: str, row: tuple, created_by: str, dry_run: bool = False) -> None:
     supplier_name, source_no, sku, item_name, qty, cost, note = (list(row) + [""] * 7)[:7]
-    supplier_id = _ensure_partner(database_path, "supplier", str(supplier_name or "默认供应商").strip())
+    supplier_label = str(supplier_name or "默认供应商").strip()
+    supplier_id = _find_partner_id(database_path, "supplier", supplier_label) if dry_run else _ensure_partner(database_path, "supplier", supplier_label)
     item = find_item_for_import(database_path, str(sku or ""), str(item_name or ""))
     if not item:
         raise ValueError("找不到商品")
+    if dry_run:
+        if str(source_no or "").strip():
+            with get_connection(database_path) as conn:
+                existing = conn.execute(
+                    "SELECT id FROM documents WHERE document_type = 'purchase' AND document_no = ?",
+                    (str(source_no).strip(),),
+                ).fetchone()
+                if existing:
+                    raise ValueError("单据号已存在")
+        return
     create_document(
         database_path,
         "purchase",
@@ -1600,13 +1671,15 @@ def _import_purchase_row(database_path: str, row: tuple, created_by: str) -> Non
     )
 
 
-def _import_stock_row(database_path: str, row: tuple, created_by: str) -> None:
+def _import_stock_row(database_path: str, row: tuple, created_by: str, dry_run: bool = False) -> None:
     action, sku, item_name, qty, cost, source_no, note = (list(row) + [""] * 7)[:7]
     action_map = {"盘盈入库": "adjust_in", "盘亏出库": "adjust_out", "销售出库": "sale_out", "领用出库": "consume_out"}
     movement_type = action_map.get(str(action).strip(), str(action or "adjust_in").strip())
     item = find_item_for_import(database_path, str(sku or ""), str(item_name or ""))
     if not item:
         raise ValueError("找不到商品")
+    if dry_run:
+        return
     create_stock_movement(
         database_path,
         movement_type,
@@ -1692,3 +1765,34 @@ def _ensure_partner(database_path: str, partner_type: str, name: str) -> int:
         )
         conn.commit()
         return int(cur.lastrowid)
+
+
+def _find_partner_id(database_path: str, partner_type: str, name: str) -> int | None:
+    with get_connection(database_path) as conn:
+        row = conn.execute("SELECT id FROM partners WHERE partner_type=? AND name=?", (partner_type, name)).fetchone()
+        return int(row["id"]) if row else None
+
+
+def save_item_preview(database_path: str, form: dict) -> None:
+    item_code = str(form.get("item_code", "")).strip()
+    item_name = str(form.get("item_name", "")).strip()
+    item_type = str(form.get("item_type", "")).strip()
+    if not item_code or not item_name or item_type not in ITEM_TYPES:
+        raise ValueError("编号、名称、类型不能为空")
+    with get_connection(database_path) as conn:
+        existing = conn.execute("SELECT id FROM items WHERE item_code = ?", (item_code,)).fetchone()
+        if existing:
+            raise ValueError("商品编号已存在")
+
+
+def _return_row_quantity(row: dict) -> float:
+    for key in ("quantity", "qty", "return_qty", "product_qty"):
+        qty = _num(row.get(key), 0)
+        if qty > 0:
+            return qty
+    return 1
+
+
+def _is_duplicate_message(message: str) -> bool:
+    lower = message.lower()
+    return "已存在" in message or "已录入" in message or "duplicate" in lower
