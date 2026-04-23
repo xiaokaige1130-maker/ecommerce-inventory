@@ -278,6 +278,35 @@ def home():
     return render_template("home.html", **context)
 
 
+@main_bp.route("/orders/<int:order_id>")
+@login_required
+@roles_required("admin", "sales", "warehouse")
+def order_detail(order_id: int):
+    database_path = current_app.config["DATABASE_PATH"]
+    order = repositories.get_sales_order(database_path, order_id)
+    if not order:
+        flash("订单不存在", "danger")
+        return redirect(url_for("main.orders"))
+    lines = repositories.order_lines(database_path, order_id)
+    return render_template("order_detail.html", order=order, lines=lines)
+
+
+@main_bp.route("/documents/<document_type>/<int:document_id>")
+@login_required
+@roles_required("admin", "purchase", "sales", "finance")
+def document_detail(document_type: str, document_id: int):
+    if document_type not in {"purchase", "sale"}:
+        flash("单据类型不存在", "danger")
+        return redirect(url_for("main.home"))
+    database_path = current_app.config["DATABASE_PATH"]
+    document = repositories.get_document(database_path, document_id)
+    if not document or document["document_type"] != document_type:
+        flash("单据不存在", "danger")
+        return redirect(url_for("main.purchase" if document_type == "purchase" else "main.sales"))
+    lines = repositories.document_lines(database_path, document_id)
+    return render_template("document_detail.html", document=document, lines=lines)
+
+
 @main_bp.route("/template/<kind>")
 @login_required
 def template(kind: str):
@@ -441,8 +470,9 @@ def purchase():
         warehouses=repositories.list_warehouses(database_path),
         suppliers=repositories.list_partners(database_path, "supplier"),
         movements=repositories.recent_movements(database_path, limit=30),
-        documents=repositories.list_documents(database_path, "purchase", 50),
+        documents=repositories.list_documents(database_path, "purchase", str(request.args.get("keyword", "")).strip(), 50),
         suggestions=repositories.purchase_suggestions(database_path),
+        keyword=str(request.args.get("keyword", "")).strip(),
     )
 
 
@@ -474,7 +504,8 @@ def sales():
         warehouses=repositories.list_warehouses(database_path),
         customers=repositories.list_partners(database_path, "customer"),
         movements=repositories.recent_movements(database_path, limit=30),
-        documents=repositories.list_documents(database_path, "sale", 50),
+        documents=repositories.list_documents(database_path, "sale", str(request.args.get("keyword", "")).strip(), 50),
+        keyword=str(request.args.get("keyword", "")).strip(),
     )
 
 
@@ -492,11 +523,17 @@ def orders():
         return redirect(url_for("main.orders"))
     return render_template(
         "orders.html",
-        rows=repositories.list_sales_orders(database_path, str(request.args.get("status", "")).strip(), 100),
+        rows=repositories.list_sales_orders(
+            database_path,
+            str(request.args.get("status", "")).strip(),
+            str(request.args.get("keyword", "")).strip(),
+            100,
+        ),
         items=repositories.list_items(database_path, "finished"),
         warehouses=repositories.list_warehouses(database_path),
         customers=repositories.list_partners(database_path, "customer"),
         current_status=str(request.args.get("status", "")).strip(),
+        keyword=str(request.args.get("keyword", "")).strip(),
         platforms=repositories.PLATFORMS,
     )
 

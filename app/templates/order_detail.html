@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>订单详情</h2>
+    <div class="detail-grid">
+        <div><span>订单号</span><strong>{{ order.order_no }}</strong></div>
+        <div><span>状态</span><strong>{{ order.status|order_status_name }}</strong></div>
+        <div><span>平台</span><strong>{{ order.platform or "-" }}</strong></div>
+        <div><span>店铺</span><strong>{{ order.shop_name or "-" }}</strong></div>
+        <div><span>客户</span><strong>{{ order.partner_name or order.customer_name or "-" }}</strong></div>
+        <div><span>仓库</span><strong>{{ order.warehouse_name or "-" }}</strong></div>
+        <div><span>金额</span><strong>{{ "%.2f"|format(order.total_amount) }}</strong></div>
+        <div><span>物流</span><strong>{{ order.logistics_company or "-" }}</strong></div>
+        <div><span>快递单号</span><strong>{{ order.tracking_no or "-" }}</strong></div>
+        <div><span>创建时间</span><strong>{{ order.created_at }}</strong></div>
+    </div>
+    <p class="hint">备注：{{ order.note or "-" }}</p>
+</section>
+<section>
+    <h2>订单明细</h2>
+    <div class="table-wrap"><table><thead><tr><th>商品编号</th><th>商品名称</th><th>数量</th><th>销售单价</th><th>行金额</th></tr></thead><tbody>
+    {% for row in lines %}
+        <tr><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td>{{ row.quantity }}</td><td>{{ "%.2f"|format(row.sale_price) }}</td><td>{{ "%.2f"|format(row.line_amount) }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">暂无明细</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+{% endblock %}

@@ -772,21 +772,29 @@ def list_stock(database_path: str) -> list[dict]:
         return result
 
 
-def recent_movements(database_path: str, limit: int = 100) -> list[dict]:
+def recent_movements(database_path: str, limit: int = 100, keyword: str = "", movement_type: str = "") -> list[dict]:
+    sql = """
+        SELECT sm.*, i.item_name, i.item_code, i.item_type, w.name AS warehouse_name, p.name AS partner_name
+        FROM stock_movements sm
+        JOIN items i ON i.id = sm.item_id
+        JOIN warehouses w ON w.id = sm.warehouse_id
+        LEFT JOIN partners p ON p.id = sm.partner_id
+        WHERE 1 = 1
+    """
+    params: list = []
+    clean_keyword = str(keyword).strip()
+    clean_type = str(movement_type).strip()
+    if clean_type:
+        sql += " AND sm.movement_type = ?"
+        params.append(clean_type)
+    if clean_keyword:
+        like = f"%{clean_keyword}%"
+        sql += " AND (i.item_code LIKE ? OR i.item_name LIKE ? OR COALESCE(sm.source_no, '') LIKE ? OR COALESCE(sm.note, '') LIKE ?)"
+        params.extend([like, like, like, like])
+    sql += " ORDER BY sm.created_at DESC LIMIT ?"
+    params.append(limit)
     with get_connection(database_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT sm.*, i.item_name, i.item_code, i.item_type, w.name AS warehouse_name, p.name AS partner_name
-            FROM stock_movements sm
-            JOIN items i ON i.id = sm.item_id
-            JOIN warehouses w ON w.id = sm.warehouse_id
-            LEFT JOIN partners p ON p.id = sm.partner_id
-            ORDER BY sm.created_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-        return [dict(row) for row in rows]
+        return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
 
 def account_summary(database_path: str) -> list[dict]:
@@ -805,7 +813,7 @@ def account_summary(database_path: str) -> list[dict]:
         return [dict(row) for row in rows]
 
 
-def list_documents(database_path: str, document_type: str = "", limit: int = 100) -> list[dict]:
+def list_documents(database_path: str, document_type: str = "", keyword: str = "", limit: int = 100) -> list[dict]:
     sql = """
         SELECT d.*, p.name AS partner_name, COUNT(dl.id) AS line_count
         FROM documents d
@@ -817,10 +825,47 @@ def list_documents(database_path: str, document_type: str = "", limit: int = 100
     if document_type:
         sql += " AND d.document_type = ?"
         params.append(document_type)
+    clean_keyword = str(keyword).strip()
+    if clean_keyword:
+        like = f"%{clean_keyword}%"
+        sql += " AND (d.document_no LIKE ? OR COALESCE(p.name, '') LIKE ? OR COALESCE(d.note, '') LIKE ?)"
+        params.extend([like, like, like])
     sql += " GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?"
     params.append(limit)
     with get_connection(database_path) as conn:
         return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def get_document(database_path: str, document_id: int) -> dict | None:
+    with get_connection(database_path) as conn:
+        row = conn.execute(
+            """
+            SELECT d.*, p.name AS partner_name
+            FROM documents d
+            LEFT JOIN partners p ON p.id = d.partner_id
+            WHERE d.id = ?
+            """,
+            (document_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def document_lines(database_path: str, document_id: int) -> list[dict]:
+    with get_connection(database_path) as conn:
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT dl.*, i.item_code, i.item_name, i.item_type, w.name AS warehouse_name
+                FROM document_lines dl
+                JOIN items i ON i.id = dl.item_id
+                JOIN warehouses w ON w.id = dl.warehouse_id
+                WHERE dl.document_id = ?
+                ORDER BY dl.id
+                """,
+                (document_id,),
+            ).fetchall()
+        ]
 
 
 def list_account_entries(database_path: str, partner_id: int | None = None, limit: int = 200) -> list[dict]:
@@ -899,7 +944,7 @@ def create_sales_order(database_path: str, form: dict, created_by: str = "") -> 
         return dict(row)
 
 
-def list_sales_orders(database_path: str, status: str = "", limit: int = 100) -> list[dict]:
+def list_sales_orders(database_path: str, status: str = "", keyword: str = "", limit: int = 100) -> list[dict]:
     sql = """
         SELECT so.*, p.name AS partner_name, COUNT(sol.id) AS line_count
         FROM sales_orders so
@@ -911,10 +956,30 @@ def list_sales_orders(database_path: str, status: str = "", limit: int = 100) ->
     if status:
         sql += " AND so.status = ?"
         params.append(status)
+    clean_keyword = str(keyword).strip()
+    if clean_keyword:
+        like = f"%{clean_keyword}%"
+        sql += " AND (so.order_no LIKE ? OR COALESCE(so.customer_name, '') LIKE ? OR COALESCE(p.name, '') LIKE ? OR COALESCE(so.tracking_no, '') LIKE ? OR COALESCE(so.platform, '') LIKE ?)"
+        params.extend([like, like, like, like, like])
     sql += " GROUP BY so.id ORDER BY so.created_at DESC LIMIT ?"
     params.append(limit)
     with get_connection(database_path) as conn:
         return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def get_sales_order(database_path: str, order_id: int) -> dict | None:
+    with get_connection(database_path) as conn:
+        row = conn.execute(
+            """
+            SELECT so.*, p.name AS partner_name, w.name AS warehouse_name
+            FROM sales_orders so
+            LEFT JOIN partners p ON p.id = so.customer_id
+            LEFT JOIN warehouses w ON w.id = so.warehouse_id
+            WHERE so.id = ?
+            """,
+            (order_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def order_lines(database_path: str, order_id: int) -> list[dict]:

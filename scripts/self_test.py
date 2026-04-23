@@ -154,6 +154,7 @@ order_resp = client.post(
 )
 assert order_resp.status_code == 200
 assert client.get("/orders").status_code == 200
+assert client.get("/orders?status=pending_review&keyword=WEB-TEST").status_code == 200
 for kind in ("items", "orders", "purchase", "stock"):
     assert client.get(f"/template/{kind}").status_code == 200
 
@@ -190,6 +191,7 @@ ship_resp = client.post(
 assert ship_resp.status_code == 200
 cancel_after_ship = client.post("/warehouse-workbench", data={"action": "cancel", "order_id": "1"}, follow_redirects=True)
 assert "当前状态不能取消".encode("utf-8") in cancel_after_ship.data
+assert client.get("/orders/1").status_code == 200
 
 pay_resp = client.post(
     "/accounts",
@@ -203,6 +205,10 @@ settlement_resp = client.post(
     follow_redirects=True,
 )
 assert settlement_resp.status_code == 200
+assert client.get("/purchase?keyword=PO-TEST").status_code == 200
+assert client.get("/sales?keyword=SO-TEST").status_code == 200
+assert client.get("/documents/purchase/1").status_code == 200
+assert client.get("/documents/sale/2").status_code == 200
 
 client.post(
     "/production",

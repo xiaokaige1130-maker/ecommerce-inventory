@@ -57,6 +57,24 @@ h3 { margin: 0 0 10px; font-size: 16px; color: #334155; }
 }
 .stats strong { display: block; font-size: 24px; color: #0f3d3e; }
 .stats span { font-size: 13px; color: #667085; }
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+.detail-grid div {
+    border: 1px solid #d8e2df;
+    border-radius: 8px;
+    background: #fbfcfc;
+    padding: 12px;
+}
+.detail-grid span {
+    display: block;
+    color: #667085;
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+.detail-grid strong { color: #0f3d3e; }
 .form-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));

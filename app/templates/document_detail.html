@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+    <h2>{{ "采购单详情" if document.document_type == "purchase" else "销售单详情" }}</h2>
+    <div class="detail-grid">
+        <div><span>单号</span><strong>{{ document.document_no }}</strong></div>
+        <div><span>类型</span><strong>{{ "采购入库" if document.document_type == "purchase" else "销售出库" }}</strong></div>
+        <div><span>对象</span><strong>{{ document.partner_name or "-" }}</strong></div>
+        <div><span>状态</span><strong>{{ document.status }}</strong></div>
+        <div><span>总金额</span><strong>{{ "%.2f"|format(document.total_amount) }}</strong></div>
+        <div><span>创建时间</span><strong>{{ document.created_at }}</strong></div>
+        <div><span>创建人</span><strong>{{ document.created_by or "-" }}</strong></div>
+    </div>
+    <p class="hint">备注：{{ document.note or "-" }}</p>
+</section>
+<section>
+    <h2>单据明细</h2>
+    <div class="table-wrap"><table><thead><tr><th>商品编号</th><th>商品名称</th><th>类型</th><th>仓库</th><th>数量</th><th>单价</th><th>行金额</th></tr></thead><tbody>
+    {% for row in lines %}
+        <tr><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td>{{ row.item_type|item_type_name }}</td><td>{{ row.warehouse_name }}</td><td>{{ row.quantity }}</td><td>{{ "%.2f"|format(row.unit_price) }}</td><td>{{ "%.2f"|format(row.line_amount) }}</td></tr>
+    {% else %}<tr><td colspan="7" class="empty">暂无明细</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+{% endblock %}
