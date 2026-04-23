@@ -19,19 +19,27 @@
     <p class="hint">备注：{{ order.note or "-" }}</p>
     <div class="toolbar">
         <a class="button-link" href="{{ url_for('main.orders', copy_id=order.id) }}">复制新建订单</a>
+        <a class="button-link" href="{{ url_for('main.warehouse_workbench', keyword=order.order_no) }}">查看仓库作业筛选结果</a>
+        <a class="button-link" href="{{ url_for('main.accounts', source_type='sales_order', keyword=order.order_no) }}">查看账目筛选结果</a>
         {% if order.status in ['pending_review', 'locked'] %}
+        {% if has_permission('edit_orders') %}
         <a class="button-link" href="{{ url_for('main.orders', edit_id=order.id) }}">编辑订单</a>
+        {% endif %}
+        {% if has_permission('reverse_orders') %}
         <form method="post" action="{{ url_for('main.order_action', order_id=order.id) }}">
             <input type="hidden" name="action" value="void">
             <input type="hidden" name="expected_version" value="{{ order.row_version }}">
             <button type="submit">作废</button>
         </form>
+        {% endif %}
         {% elif order.status == 'shipped' %}
+        {% if has_permission('reverse_orders') %}
         <form method="post" action="{{ url_for('main.order_action', order_id=order.id) }}">
             <input type="hidden" name="action" value="red_flush">
             <input type="hidden" name="expected_version" value="{{ order.row_version }}">
             <button type="submit">红冲</button>
         </form>
+        {% endif %}
         {% endif %}
     </div>
 </section>

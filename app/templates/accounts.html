@@ -21,7 +21,7 @@
                 <input name="source_no" value="{{ editing_entry.source_no if editing_entry else '' }}" placeholder="收付款单号">
                 <input name="note" value="{{ editing_entry.note if editing_entry else '' }}" placeholder="备注">
                 <label><input type="checkbox" name="force_save" value="1"> 页面有新账目时仍继续保存</label>
-                <button>{{ "保存收付款修改" if editing_entry else "保存收付款" }}</button>
+                <button {% if editing_entry and not has_permission('edit_payments') %}disabled{% endif %}>{{ "保存收付款修改" if editing_entry else "保存收付款" }}</button>
             </form>
             {% if editing_entry %}<p class="hint"><a class="button-link" href="{{ url_for('main.accounts') }}">取消编辑收付款</a></p>{% endif %}
         </div>
@@ -41,7 +41,7 @@
                 <input name="settled_at" value="{{ editing_settlement.settled_at if editing_settlement else '' }}" placeholder="对账日期">
                 <input name="note" value="{{ editing_settlement.note if editing_settlement else '' }}" placeholder="备注">
                 <label><input type="checkbox" name="force_save" value="1"> 页面有新账目时仍继续保存</label>
-                <button>{{ "保存平台对账修改" if editing_settlement else "保存平台对账" }}</button>
+                <button {% if editing_settlement and not has_permission('edit_settlements') %}disabled{% endif %}>{{ "保存平台对账修改" if editing_settlement else "保存平台对账" }}</button>
             </form>
             {% if editing_settlement %}<p class="hint"><a class="button-link" href="{{ url_for('main.accounts') }}">取消编辑平台对账</a></p>{% endif %}
         </div>
@@ -57,7 +57,7 @@
     <h2>平台对账明细</h2>
     <p><a class="button-link" href="{{ url_for('main.export', kind='settlements') }}">导出平台对账</a></p>
     <div class="table-wrap"><table><thead><tr><th>时间</th><th>单号</th><th>平台</th><th>成交额</th><th>佣金</th><th>运费</th><th>退款</th><th>净额</th><th>备注</th><th>操作</th></tr></thead><tbody>
-    {% for row in settlements %}<tr><td>{{ row.created_at }}</td><td>{{ row.settlement_no }}</td><td>{{ row.platform }}</td><td>{{ "%.2f"|format(row.amount) }}</td><td>{{ "%.2f"|format(row.commission) }}</td><td>{{ "%.2f"|format(row.freight) }}</td><td>{{ "%.2f"|format(row.refund_amount) }}</td><td class="pos">{{ "%.2f"|format(row.net_amount) }}</td><td>{{ row.note }}</td><td><a href="{{ url_for('main.accounts', edit_settlement_id=row.id) }}">编辑</a> <form class="inline-form" method="post" action="{{ url_for('main.settlement_action', settlement_id=row.id) }}"><input type="hidden" name="action" value="void"><input type="hidden" name="expected_version" value="{{ row.row_version }}"><button type="submit">作废</button></form></td></tr>{% else %}<tr><td colspan="10" class="empty">暂无平台对账</td></tr>{% endfor %}
+    {% for row in settlements %}<tr><td>{{ row.created_at }}</td><td>{{ row.settlement_no }}</td><td>{{ row.platform }}</td><td>{{ "%.2f"|format(row.amount) }}</td><td>{{ "%.2f"|format(row.commission) }}</td><td>{{ "%.2f"|format(row.freight) }}</td><td>{{ "%.2f"|format(row.refund_amount) }}</td><td class="pos">{{ "%.2f"|format(row.net_amount) }}</td><td>{{ row.note }}</td><td>{% if has_permission('edit_settlements') %}<a href="{{ url_for('main.accounts', edit_settlement_id=row.id) }}">编辑</a>{% endif %} {% if has_permission('void_settlements') %}<form class="inline-form" method="post" action="{{ url_for('main.settlement_action', settlement_id=row.id) }}"><input type="hidden" name="action" value="void"><input type="hidden" name="expected_version" value="{{ row.row_version }}"><button type="submit">作废</button></form>{% endif %}{% if not has_permission('edit_settlements') and not has_permission('void_settlements') %}-{% endif %}</td></tr>{% else %}<tr><td colspan="10" class="empty">暂无平台对账</td></tr>{% endfor %}
     </tbody></table></div>
 </section>
 <section>
@@ -79,7 +79,7 @@
         <button>查询</button>
     </form>
     <div class="table-wrap"><table><thead><tr><th>时间</th><th>对象</th><th>科目</th><th>方向</th><th>金额</th><th>来源方式</th><th>来源单号</th><th>创建人</th><th>备注</th><th>操作</th></tr></thead><tbody>
-    {% for row in entries %}<tr><td>{{ row.created_at }}</td><td>{{ row.partner_name }}</td><td>{{ row.account_type }}</td><td>{{ row.direction }}</td><td>{{ "%.2f"|format(row.amount) }}</td><td>{{ row.source_type|source_channel_name }}</td><td>{{ row.source_no or "-" }}</td><td>{{ row.created_by or "-" }}</td><td>{{ row.note }}</td><td>{% if row.source_type == 'payment' %}<a href="{{ url_for('main.accounts', edit_entry_id=row.id) }}">编辑</a> <form class="inline-form" method="post" action="{{ url_for('main.account_entry_action', entry_id=row.id) }}"><input type="hidden" name="action" value="void"><input type="hidden" name="expected_version" value="{{ row.row_version }}"><button type="submit">作废</button></form>{% else %}-{% endif %}</td></tr>{% else %}<tr><td colspan="10" class="empty">暂无明细</td></tr>{% endfor %}
+    {% for row in entries %}<tr><td>{{ row.created_at }}</td><td>{{ row.partner_name }}</td><td>{{ row.account_type }}</td><td>{{ row.direction }}</td><td>{{ "%.2f"|format(row.amount) }}</td><td>{{ row.source_type|source_channel_name }}</td><td>{{ row.source_no or "-" }}</td><td>{{ row.created_by or "-" }}</td><td>{{ row.note }}</td><td>{% if row.source_type == 'payment' %}{% if has_permission('edit_payments') %}<a href="{{ url_for('main.accounts', edit_entry_id=row.id) }}">编辑</a>{% endif %} {% if has_permission('void_payments') %}<form class="inline-form" method="post" action="{{ url_for('main.account_entry_action', entry_id=row.id) }}"><input type="hidden" name="action" value="void"><input type="hidden" name="expected_version" value="{{ row.row_version }}"><button type="submit">作废</button></form>{% endif %}{% if not has_permission('edit_payments') and not has_permission('void_payments') %}-{% endif %}{% else %}-{% endif %}</td></tr>{% else %}<tr><td colspan="10" class="empty">暂无明细</td></tr>{% endfor %}
     </tbody></table></div>
 </section>
 {% endblock %}

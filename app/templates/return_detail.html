@@ -14,6 +14,13 @@
         <div><span>创建时间</span><strong>{{ row.created_at }}</strong></div>
         <div><span>更新时间</span><strong>{{ row.updated_at }}</strong></div>
     </div>
+    <div class="toolbar">
+        <a class="button-link" href="{{ url_for('main.returns', keyword=row.tracking_no) }}">返回退货筛选结果</a>
+        <a class="button-link" href="{{ url_for('main.stock', movement_keyword=row.tracking_no) }}">查看关联库存流水</a>
+        {% if row.order_no %}
+        <a class="button-link" href="{{ url_for('main.warehouse_workbench', keyword=row.order_no) }}">查看关联订单发货</a>
+        {% endif %}
+    </div>
 </section>
 <section>
     <h2>来源数据</h2>

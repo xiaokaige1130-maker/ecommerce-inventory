@@ -15,8 +15,13 @@
     <p class="hint">备注：{{ document.note or "-" }}</p>
     <div class="toolbar">
         <a class="button-link" href="{{ url_for('main.purchase' if document.document_type == 'purchase' else 'main.sales', copy_id=document.id) }}">复制新建{{ "采购单" if document.document_type == "purchase" else "销售单" }}</a>
+        <a class="button-link" href="{{ url_for('main.stock', movement_keyword=document.document_no) }}">查看库存流水筛选结果</a>
+        <a class="button-link" href="{{ url_for('main.accounts', source_type=document.document_type, keyword=document.document_no) }}">查看账目筛选结果</a>
         {% if document.status == 'confirmed' %}
+        {% if has_permission('edit_documents') %}
         <a class="button-link" href="{{ url_for('main.purchase' if document.document_type == 'purchase' else 'main.sales', edit_id=document.id) }}">编辑单据</a>
+        {% endif %}
+        {% if has_permission('reverse_documents') %}
         <form method="post" action="{{ url_for('main.document_action', document_type=document.document_type, document_id=document.id) }}">
             <input type="hidden" name="action" value="void">
             <input type="hidden" name="expected_version" value="{{ document.row_version }}">
@@ -27,6 +32,7 @@
             <input type="hidden" name="expected_version" value="{{ document.row_version }}">
             <button type="submit">红冲</button>
         </form>
+        {% endif %}
         {% endif %}
     </div>
 </section>

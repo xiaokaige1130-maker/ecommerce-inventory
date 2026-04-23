@@ -67,6 +67,50 @@ ROLE_NAV_ITEMS = {
     ],
 }
 
+ROLE_PERMISSIONS = {
+    "admin": {
+        "manage_exceptions",
+        "edit_documents",
+        "reverse_documents",
+        "edit_orders",
+        "reverse_orders",
+        "edit_stock_adjustments",
+        "void_stock_adjustments",
+        "edit_payments",
+        "void_payments",
+        "edit_settlements",
+        "void_settlements",
+        "manage_users",
+    },
+    "boss": set(),
+    "warehouse": {
+        "manage_exceptions",
+        "edit_orders",
+        "reverse_orders",
+        "edit_stock_adjustments",
+        "void_stock_adjustments",
+    },
+    "purchase": {
+        "edit_documents",
+    },
+    "sales": {
+        "manage_exceptions",
+        "edit_documents",
+        "edit_orders",
+        "reverse_orders",
+    },
+    "finance": {
+        "manage_exceptions",
+        "edit_documents",
+        "reverse_documents",
+        "edit_payments",
+        "void_payments",
+        "edit_settlements",
+        "void_settlements",
+    },
+    "staff": set(),
+}
+
 IMPORT_KIND_META = {
     "items": {"label": "商品资料", "endpoint": "main.items"},
     "orders": {"label": "订单", "endpoint": "main.orders"},
@@ -184,6 +228,27 @@ def roles_required(*roles: str):
     return decorator
 
 
+def _has_permission(permission: str) -> bool:
+    role = session.get("role") or "staff"
+    return permission in ROLE_PERMISSIONS.get(role, set())
+
+
+def permission_required(permission: str):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if not session.get("logged_in"):
+                return redirect(url_for("main.login", next=request.path))
+            if not _has_permission(permission):
+                flash("当前账号没有权限执行该操作", "danger")
+                return redirect(request.referrer or url_for("main.home"))
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 def _safe_next_url(target: str | None) -> str:
     fallback = url_for("main.home")
     if not target:
@@ -217,7 +282,12 @@ def _clear_import_draft() -> None:
 def inject_navigation():
     role = session.get("role") or "staff"
     nav_items = ROLE_NAV_ITEMS.get(role, ROLE_NAV_ITEMS["staff"])
-    return {"nav_items": nav_items, "current_role": role, "current_role_label": role_name(role)}
+    return {
+        "nav_items": nav_items,
+        "current_role": role,
+        "current_role_label": role_name(role),
+        "has_permission": _has_permission,
+    }
 
 
 @main_bp.route("/login", methods=["GET", "POST"])
@@ -322,6 +392,7 @@ def exceptions():
 @main_bp.route("/exceptions/mark", methods=["POST"])
 @login_required
 @roles_required("admin", "warehouse", "sales", "finance")
+@permission_required("manage_exceptions")
 def exception_mark():
     try:
         repositories.upsert_exception_mark(
@@ -413,9 +484,13 @@ def order_action(order_id: int):
     database_path = current_app.config["DATABASE_PATH"]
     try:
         if action == "void":
+            if not _has_permission("reverse_orders"):
+                raise ValueError("当前账号没有权限作废订单")
             repositories.void_sales_order(database_path, order_id, request.form.get("expected_version"), session.get("username", ""))
             flash("订单已作废", "success")
         elif action == "red_flush":
+            if not _has_permission("reverse_orders"):
+                raise ValueError("当前账号没有权限红冲订单")
             red_no = repositories.red_flush_sales_order(database_path, order_id, request.form.get("expected_version"), session.get("username", ""))
             flash(f"订单已红冲：{red_no}", "success")
         else:
@@ -433,9 +508,13 @@ def document_action(document_type: str, document_id: int):
     try:
         action = str(request.form.get("action", "")).strip()
         if action == "void":
+            if not _has_permission("reverse_documents"):
+                raise ValueError("当前账号没有权限作废单据")
             repositories.void_document(database_path, document_id, request.form.get("expected_version"), session.get("username", ""))
             flash("单据已作废", "success")
         elif action == "red_flush":
+            if not _has_permission("reverse_documents"):
+                raise ValueError("当前账号没有权限红冲单据")
             red_no = repositories.red_flush_document(database_path, document_id, request.form.get("expected_version"), session.get("username", ""))
             flash(f"单据已红冲：{red_no}", "success")
         else:
@@ -563,6 +642,8 @@ def stock():
                     raise ValueError("库存页面已有新流水，请刷新确认后再保存")
             movement_id = int(request.form.get("movement_id") or 0)
             if movement_id:
+                if not _has_permission("edit_stock_adjustments"):
+                    raise ValueError("当前账号没有权限编辑库存流水")
                 repositories.update_manual_stock_movement(database_path, movement_id, request.form, session.get("username", ""))
                 flash("库存流水已更新", "success")
             else:
@@ -607,6 +688,7 @@ def stock():
 @main_bp.route("/stock/<int:movement_id>/action", methods=["POST"])
 @login_required
 @roles_required("admin", "warehouse")
+@permission_required("void_stock_adjustments")
 def stock_action(movement_id: int):
     try:
         action = str(request.form.get("action", "")).strip()
@@ -634,6 +716,8 @@ def purchase():
         try:
             document_id = int(request.form.get("document_id") or 0)
             if document_id:
+                if not _has_permission("edit_documents"):
+                    raise ValueError("当前账号没有权限编辑单据")
                 repositories.update_document(database_path, document_id, request.form, session.get("username", ""))
                 flash("采购单已更新", "success")
             else:
@@ -691,6 +775,8 @@ def sales():
         try:
             document_id = int(request.form.get("document_id") or 0)
             if document_id:
+                if not _has_permission("edit_documents"):
+                    raise ValueError("当前账号没有权限编辑单据")
                 repositories.update_document(database_path, document_id, request.form, session.get("username", ""))
                 flash("销售单已更新", "success")
             else:
@@ -747,6 +833,8 @@ def orders():
         try:
             order_id = int(request.form.get("order_id") or 0)
             if order_id:
+                if not _has_permission("edit_orders"):
+                    raise ValueError("当前账号没有权限编辑订单")
                 repositories.update_sales_order(database_path, order_id, request.form, session.get("username", ""))
                 flash("订单已更新", "success")
             else:
@@ -911,6 +999,8 @@ def accounts():
             if action == "settlement":
                 settlement_id = int(request.form.get("settlement_id") or 0)
                 if settlement_id:
+                    if not _has_permission("edit_settlements"):
+                        raise ValueError("当前账号没有权限编辑平台对账")
                     repositories.update_platform_settlement(database_path, settlement_id, request.form, session.get("username", ""))
                     flash("平台对账已更新", "success")
                 else:
@@ -919,6 +1009,8 @@ def accounts():
             else:
                 entry_id = int(request.form.get("entry_id") or 0)
                 if entry_id:
+                    if not _has_permission("edit_payments"):
+                        raise ValueError("当前账号没有权限编辑收付款")
                     repositories.update_payment_entry(database_path, entry_id, request.form, session.get("username", ""))
                     flash("收付款已更新", "success")
                 else:
@@ -954,6 +1046,7 @@ def accounts():
 @main_bp.route("/accounts/entries/<int:entry_id>/action", methods=["POST"])
 @login_required
 @roles_required("admin", "finance")
+@permission_required("void_payments")
 def account_entry_action(entry_id: int):
     try:
         action = str(request.form.get("action", "")).strip()
@@ -970,6 +1063,7 @@ def account_entry_action(entry_id: int):
 @main_bp.route("/accounts/settlements/<int:settlement_id>/action", methods=["POST"])
 @login_required
 @roles_required("admin", "finance")
+@permission_required("void_settlements")
 def settlement_action(settlement_id: int):
     try:
         action = str(request.form.get("action", "")).strip()

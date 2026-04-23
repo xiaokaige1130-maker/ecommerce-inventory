@@ -24,7 +24,7 @@
                 <input name="source_no" value="{{ editing_movement.source_no if editing_movement else '' }}" placeholder="来源单号">
                 <input name="note" value="{{ editing_movement.note if editing_movement else '' }}" placeholder="备注">
                 <label><input type="checkbox" name="force_save" value="1"> 页面有新流水时仍继续保存</label>
-                <button>{{ "保存库存流水修改" if editing_movement else "保存库存流水" }}</button>
+                <button {% if editing_movement and not has_permission('edit_stock_adjustments') %}disabled{% endif %}>{{ "保存库存流水修改" if editing_movement else "保存库存流水" }}</button>
             </form>
             {% if editing_movement %}<p class="hint"><a class="button-link" href="{{ url_for('main.stock') }}">取消编辑库存流水</a></p>{% endif %}
         </div>
@@ -93,7 +93,7 @@
                 <td>{{ row.source_no or "-" }}</td>
                 <td>{{ row.created_by or "-" }}</td>
                 <td>{{ row.note }}</td>
-                <td>{% if row.source_type == 'manual' and row.movement_type in ['adjust_in', 'adjust_out'] %}<a href="{{ url_for('main.stock', edit_id=row.id) }}">编辑</a> <form class="inline-form" method="post" action="{{ url_for('main.stock_action', movement_id=row.id) }}"><input type="hidden" name="action" value="void"><input type="hidden" name="expected_version" value="{{ row.row_version }}"><button type="submit">作废</button></form>{% else %}-{% endif %}</td>
+                <td>{% if row.source_type == 'manual' and row.movement_type in ['adjust_in', 'adjust_out'] %}{% if has_permission('edit_stock_adjustments') %}<a href="{{ url_for('main.stock', edit_id=row.id) }}">编辑</a>{% endif %} {% if has_permission('void_stock_adjustments') %}<form class="inline-form" method="post" action="{{ url_for('main.stock_action', movement_id=row.id) }}"><input type="hidden" name="action" value="void"><input type="hidden" name="expected_version" value="{{ row.row_version }}"><button type="submit">作废</button></form>{% endif %}{% if not has_permission('edit_stock_adjustments') and not has_permission('void_stock_adjustments') %}-{% endif %}{% else %}-{% endif %}</td>
             </tr>
         {% else %}
             <tr><td colspan="12" class="empty">暂无数据</td></tr>

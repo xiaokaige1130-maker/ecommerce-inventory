@@ -13,7 +13,7 @@
                 <h1>{{ config.APP_NAME }}</h1>
                 <p>{{ config.APP_SUBTITLE }}</p>
                 {% if session.get("logged_in") %}
-                <p>当前角色：{{ current_role_label }}</p>
+                <p>当前角色：{{ current_role_label }} / {{ session.get("display_name") or session.get("username") }}</p>
                 {% endif %}
             </div>
             <nav>
