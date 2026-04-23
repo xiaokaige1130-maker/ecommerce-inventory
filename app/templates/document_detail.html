@@ -13,7 +13,22 @@
         <div><span>创建人</span><strong>{{ document.created_by or "-" }}</strong></div>
     </div>
     <p class="hint">备注：{{ document.note or "-" }}</p>
-    <p><a class="button-link" href="{{ url_for('main.purchase' if document.document_type == 'purchase' else 'main.sales', copy_id=document.id) }}">复制新建{{ "采购单" if document.document_type == "purchase" else "销售单" }}</a></p>
+    <div class="toolbar">
+        <a class="button-link" href="{{ url_for('main.purchase' if document.document_type == 'purchase' else 'main.sales', copy_id=document.id) }}">复制新建{{ "采购单" if document.document_type == "purchase" else "销售单" }}</a>
+        {% if document.status == 'confirmed' %}
+        <a class="button-link" href="{{ url_for('main.purchase' if document.document_type == 'purchase' else 'main.sales', edit_id=document.id) }}">编辑单据</a>
+        <form method="post" action="{{ url_for('main.document_action', document_type=document.document_type, document_id=document.id) }}">
+            <input type="hidden" name="action" value="void">
+            <input type="hidden" name="expected_version" value="{{ document.row_version }}">
+            <button type="submit">作废</button>
+        </form>
+        <form method="post" action="{{ url_for('main.document_action', document_type=document.document_type, document_id=document.id) }}">
+            <input type="hidden" name="action" value="red_flush">
+            <input type="hidden" name="expected_version" value="{{ document.row_version }}">
+            <button type="submit">红冲</button>
+        </form>
+        {% endif %}
+    </div>
 </section>
 <section>
     <h2>单据明细</h2>
@@ -21,6 +36,12 @@
     {% for row in lines %}
         <tr><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td>{{ row.item_type|item_type_name }}</td><td>{{ row.warehouse_name }}</td><td>{{ row.quantity }}</td><td>{{ "%.2f"|format(row.unit_price) }}</td><td>{{ "%.2f"|format(row.line_amount) }}</td></tr>
     {% else %}<tr><td colspan="7" class="empty">暂无明细</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section>
+    <h2>操作日志</h2>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>动作</th><th>摘要</th><th>详情</th><th>操作人</th></tr></thead><tbody>
+    {% for row in logs %}<tr><td>{{ row.created_at }}</td><td>{{ row.action }}</td><td>{{ row.summary }}</td><td>{{ row.detail or "-" }}</td><td>{{ row.created_by or "-" }}</td></tr>{% else %}<tr><td colspan="5" class="empty">暂无日志</td></tr>{% endfor %}
     </tbody></table></div>
 </section>
 {% endblock %}

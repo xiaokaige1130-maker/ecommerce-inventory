@@ -12,13 +12,15 @@
         <button>批量导入平台订单</button>
     </form>
     <form class="form-grid compact" method="post">
-        <input name="order_no" value="{{ copy_order.order_no ~ '-COPY' if copy_order else '' }}" placeholder="订单号">
-        <select name="platform">{% for platform in platforms %}<option value="{{ platform }}" {% if copy_order and copy_order.platform == platform %}selected{% endif %}>{{ platform }}</option>{% endfor %}</select>
-        <input name="shop_name" value="{{ copy_order.shop_name if copy_order else '默认店铺' }}" placeholder="店铺">
-        <select name="customer_id"><option value="">散客</option>{% for p in customers %}<option value="{{ p.id }}" {% if copy_order and copy_order.customer_id == p.id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}</select>
-        <input name="customer_name" value="{{ copy_order.customer_name if copy_order else '' }}" placeholder="客户姓名">
-        <select name="warehouse_id">{% for w in warehouses %}<option value="{{ w.id }}" {% if copy_order and copy_order.warehouse_id == w.id %}selected{% endif %}>{{ w.name }}</option>{% endfor %}</select>
-        <input name="note" value="{{ copy_order.note if copy_order else '' }}" placeholder="备注">
+        <input type="hidden" name="order_id" value="{{ editing_order.id if editing_order else '' }}">
+        <input type="hidden" name="expected_version" value="{{ editing_order.row_version if editing_order else '' }}">
+        <input name="order_no" value="{{ editing_order.order_no if editing_order else (copy_order.order_no ~ '-COPY' if copy_order else '') }}" placeholder="订单号">
+        <select name="platform">{% for platform in platforms %}<option value="{{ platform }}" {% if (editing_order and editing_order.platform == platform) or (not editing_order and copy_order and copy_order.platform == platform) %}selected{% endif %}>{{ platform }}</option>{% endfor %}</select>
+        <input name="shop_name" value="{{ editing_order.shop_name if editing_order else (copy_order.shop_name if copy_order else '默认店铺') }}" placeholder="店铺">
+        <select name="customer_id"><option value="">散客</option>{% for p in customers %}<option value="{{ p.id }}" {% if (editing_order and editing_order.customer_id == p.id) or (not editing_order and copy_order and copy_order.customer_id == p.id) %}selected{% endif %}>{{ p.name }}</option>{% endfor %}</select>
+        <input name="customer_name" value="{{ editing_order.customer_name if editing_order else (copy_order.customer_name if copy_order else '') }}" placeholder="客户姓名">
+        <select name="warehouse_id">{% for w in warehouses %}<option value="{{ w.id }}" {% if (editing_order and editing_order.warehouse_id == w.id) or (not editing_order and copy_order and copy_order.warehouse_id == w.id) %}selected{% endif %}>{{ w.name }}</option>{% endfor %}</select>
+        <input name="note" value="{{ editing_order.note if editing_order else (copy_order.note if copy_order else '') }}" placeholder="备注">
         <div class="line-items">
             {% for line in form_lines %}
             <div class="line-item-row">
@@ -28,9 +30,9 @@
             </div>
             {% endfor %}
         </div>
-        <button>{{ "复制后新建订单" if copy_order else "新增订单" }}</button>
+        <button>{% if editing_order %}保存订单修改{% elif copy_order %}复制后新建订单{% else %}新增订单{% endif %}</button>
     </form>
-    {% if copy_order %}<p class="hint"><a class="button-link" href="{{ url_for('main.orders') }}">取消复制</a></p>{% endif %}
+    {% if copy_order or editing_order %}<p class="hint"><a class="button-link" href="{{ url_for('main.orders') }}">取消{{ "编辑" if editing_order else "复制" }}</a></p>{% endif %}
 </section>
 <section>
     <h2>订单查询</h2>
@@ -52,10 +54,10 @@
         <button>查询</button>
         <a class="button-link" href="{{ url_for('main.export', kind='orders') }}">导出订单</a>
     </form>
-    <div class="table-wrap"><table><thead><tr><th>创建时间</th><th>订单号</th><th>来源方式</th><th>创建人</th><th>状态</th><th>平台</th><th>店铺</th><th>客户</th><th>明细数</th><th>金额</th><th>物流</th><th>快递单号</th></tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>创建时间</th><th>订单号</th><th>来源方式</th><th>创建人</th><th>状态</th><th>平台</th><th>店铺</th><th>客户</th><th>明细数</th><th>金额</th><th>物流</th><th>快递单号</th><th>操作</th></tr></thead><tbody>
     {% for row in rows %}
-        <tr><td>{{ row.created_at }}</td><td><a href="{{ url_for('main.order_detail', order_id=row.id) }}">{{ row.order_no }}</a></td><td>{{ row.source_channel|source_channel_name }}</td><td>{{ row.created_by or "-" }}</td><td>{{ row.status|order_status_name }}</td><td>{{ row.platform }}</td><td>{{ row.shop_name }}</td><td>{{ row.partner_name or row.customer_name }}</td><td>{{ row.line_count }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td><td>{{ row.logistics_company }}</td><td>{{ row.tracking_no }}</td></tr>
-    {% else %}<tr><td colspan="12" class="empty">暂无订单</td></tr>{% endfor %}
+        <tr><td>{{ row.created_at }}</td><td><a href="{{ url_for('main.order_detail', order_id=row.id) }}">{{ row.order_no }}</a></td><td>{{ row.source_channel|source_channel_name }}</td><td>{{ row.created_by or "-" }}</td><td>{{ row.status|order_status_name }}</td><td>{{ row.platform }}</td><td>{{ row.shop_name }}</td><td>{{ row.partner_name or row.customer_name }}</td><td>{{ row.line_count }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td><td>{{ row.logistics_company }}</td><td>{{ row.tracking_no }}</td><td>{% if row.status in ["pending_review", "locked"] %}<a href="{{ url_for('main.orders', edit_id=row.id) }}">编辑</a>{% else %}-{% endif %}</td></tr>
+    {% else %}<tr><td colspan="13" class="empty">暂无订单</td></tr>{% endfor %}
     </tbody></table></div>
 </section>
 {% endblock %}

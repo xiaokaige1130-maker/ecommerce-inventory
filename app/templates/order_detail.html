@@ -17,7 +17,23 @@
         <div><span>创建时间</span><strong>{{ order.created_at }}</strong></div>
     </div>
     <p class="hint">备注：{{ order.note or "-" }}</p>
-    <p><a class="button-link" href="{{ url_for('main.orders', copy_id=order.id) }}">复制新建订单</a></p>
+    <div class="toolbar">
+        <a class="button-link" href="{{ url_for('main.orders', copy_id=order.id) }}">复制新建订单</a>
+        {% if order.status in ['pending_review', 'locked'] %}
+        <a class="button-link" href="{{ url_for('main.orders', edit_id=order.id) }}">编辑订单</a>
+        <form method="post" action="{{ url_for('main.order_action', order_id=order.id) }}">
+            <input type="hidden" name="action" value="void">
+            <input type="hidden" name="expected_version" value="{{ order.row_version }}">
+            <button type="submit">作废</button>
+        </form>
+        {% elif order.status == 'shipped' %}
+        <form method="post" action="{{ url_for('main.order_action', order_id=order.id) }}">
+            <input type="hidden" name="action" value="red_flush">
+            <input type="hidden" name="expected_version" value="{{ order.row_version }}">
+            <button type="submit">红冲</button>
+        </form>
+        {% endif %}
+    </div>
 </section>
 <section>
     <h2>订单明细</h2>
@@ -25,6 +41,12 @@
     {% for row in lines %}
         <tr><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td>{{ row.quantity }}</td><td>{{ "%.2f"|format(row.sale_price) }}</td><td>{{ "%.2f"|format(row.line_amount) }}</td></tr>
     {% else %}<tr><td colspan="5" class="empty">暂无明细</td></tr>{% endfor %}
+    </tbody></table></div>
+</section>
+<section>
+    <h2>操作日志</h2>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>动作</th><th>摘要</th><th>详情</th><th>操作人</th></tr></thead><tbody>
+    {% for row in logs %}<tr><td>{{ row.created_at }}</td><td>{{ row.action }}</td><td>{{ row.summary }}</td><td>{{ row.detail or "-" }}</td><td>{{ row.created_by or "-" }}</td></tr>{% else %}<tr><td colspan="5" class="empty">暂无日志</td></tr>{% endfor %}
     </tbody></table></div>
 </section>
 {% endblock %}

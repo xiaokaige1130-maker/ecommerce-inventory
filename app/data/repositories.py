@@ -33,6 +33,77 @@ def now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def log_operation(
+    database_path: str,
+    entity_type: str,
+    entity_id: int,
+    action: str,
+    summary: str,
+    detail: str = "",
+    created_by: str = "",
+) -> None:
+    with get_connection(database_path) as conn:
+        _log_operation(conn, entity_type, entity_id, action, summary, detail, created_by)
+        conn.commit()
+
+
+def list_operation_logs(database_path: str, entity_type: str, entity_id: int, limit: int = 50) -> list[dict]:
+    with get_connection(database_path) as conn:
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM operation_logs
+                WHERE entity_type = ? AND entity_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (entity_type, entity_id, limit),
+            ).fetchall()
+        ]
+
+
+def latest_snapshot_tokens(database_path: str) -> dict[str, str]:
+    with get_connection(database_path) as conn:
+        stock_row = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) AS max_id, COALESCE(MAX(created_at), '') AS max_created FROM stock_movements"
+        ).fetchone()
+        account_row = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) AS max_id, COALESCE(MAX(created_at), '') AS max_created FROM account_entries"
+        ).fetchone()
+        stock_token = f"{stock_row['max_id']}@{stock_row['max_created']}"
+        account_token = f"{account_row['max_id']}@{account_row['max_created']}"
+    return {"stock": str(stock_token or ""), "accounts": str(account_token or "")}
+
+
+def _log_operation(conn, entity_type: str, entity_id: int, action: str, summary: str, detail: str = "", created_by: str = "") -> None:
+    conn.execute(
+        """
+        INSERT INTO operation_logs (entity_type, entity_id, action, summary, detail, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (entity_type, entity_id, action, summary, detail, created_by, now()),
+    )
+
+
+def _require_snapshot(current_value: str, expected_value: str, label: str) -> None:
+    if expected_value and current_value != expected_value:
+        raise ValueError(f"{label}页面已经有新数据写入，请刷新后确认再提交")
+
+
+def _require_row_version(row: sqlite3.Row | dict | None, expected_version: int | str | None, label: str) -> None:
+    if not row:
+        raise ValueError(f"{label}不存在")
+    actual = int(row["row_version"] or 0)
+    try:
+        expected = int(expected_version if expected_version not in (None, "") else actual)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label}版本号无效") from exc
+    if actual != expected:
+        raise ValueError(f"{label}已被其他人更新，请刷新后再编辑")
+
+
 def ensure_default_users(database_path: str, users: Iterable[dict[str, str]]) -> None:
     with get_connection(database_path) as conn:
         for user in users:
@@ -621,6 +692,16 @@ def create_stock_movement(
         )
         conn.commit()
         row = conn.execute("SELECT * FROM stock_movements WHERE movement_no = ?", (movement_no,)).fetchone()
+        _log_operation(
+            conn,
+            "stock_movement",
+            int(row["id"]),
+            "create",
+            "新增库存流水",
+            f"{movement_type} {signed_qty:g}，来源：{source_no or '-'}",
+            created_by,
+        )
+        conn.commit()
         return dict(row)
 
 
@@ -693,34 +774,16 @@ def create_document(
                     item_name = item["item_name"] if item else str(item_id)
                     raise ValueError(f"{item_name} 库存不足：当前库存 {current_qty:g}，本次销售 {required_qty:g}")
         cur = conn.execute(
-                """
-                INSERT INTO documents (
-                    document_no, document_type, source_channel, partner_id, total_amount, note, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (document_no, document_type, source_channel, partner_id, total_amount, note, created_by, ts, ts),
-            )
+            """
+            INSERT INTO documents (
+                document_no, document_type, source_channel, partner_id, total_amount, note, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (document_no, document_type, source_channel, partner_id, total_amount, note, created_by, ts, ts),
+        )
         document_id = cur.lastrowid
-        for line in lines:
-            qty = abs(float(line["quantity"]))
-            unit_price = float(line["unit_price"])
-            line_amount = qty * unit_price
-            conn.execute(
-                """
-                INSERT INTO document_lines (
-                    document_id, item_id, warehouse_id, quantity, unit_price, line_amount, note
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    document_id,
-                    int(line["item_id"]),
-                    int(line["warehouse_id"]),
-                    qty,
-                    unit_price,
-                    line_amount,
-                    str(line.get("note", "")),
-                ),
-            )
+        _replace_document_lines(conn, document_id, lines)
+        _log_operation(conn, "document", document_id, "create", f"新建{'采购' if document_type == 'purchase' else '销售'}单", f"单号：{document_no}，金额：{total_amount:.2f}", created_by)
         conn.commit()
 
     movement_type = "purchase_in" if document_type == "purchase" else "sale_out"
@@ -757,6 +820,58 @@ def create_document(
         return dict(row)
 
 
+def update_document(database_path: str, document_id: int, form: dict, updated_by: str = "") -> dict:
+    ts = now()
+    with get_connection(database_path) as conn:
+        document = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        _require_row_version(document, form.get("expected_version"), "单据")
+        if not document:
+            raise ValueError("单据不存在")
+        if document["status"] != "confirmed":
+            raise ValueError("当前状态不能编辑单据")
+        document_type = document["document_type"]
+        partner_id = int(form.get("partner_id") or 0)
+        lines = _document_lines_from_form(form)
+        total_amount = sum(abs(float(row["quantity"])) * float(row["unit_price"]) for row in lines)
+        document_no = str(form.get("source_no", "")).strip() or document["document_no"]
+        duplicate = conn.execute(
+            "SELECT id FROM documents WHERE document_no = ? AND id <> ?",
+            (document_no, document_id),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("单据号已存在")
+        _validate_document_lines(conn, document_type, lines, document_id)
+        _delete_document_effects(conn, document["document_no"], document_id, document_type)
+        conn.execute(
+            """
+            UPDATE documents
+            SET document_no = ?, partner_id = ?, total_amount = ?, note = ?, updated_at = ?, row_version = row_version + 1
+            WHERE id = ?
+            """,
+            (
+                document_no,
+                partner_id,
+                total_amount,
+                str(form.get("note", "")).strip(),
+                ts,
+                document_id,
+            ),
+        )
+        _replace_document_lines(conn, document_id, lines)
+        _log_operation(conn, "document", document_id, "update", "编辑单据", f"单号：{document_no}，金额：{total_amount:.2f}", updated_by)
+        conn.commit()
+    _apply_document_effects(database_path, document_id, document_type, document_no, partner_id, lines, updated_by)
+    return get_document(database_path, document_id) or {}
+
+
+def void_document(database_path: str, document_id: int, expected_version: int | str | None, created_by: str = "") -> None:
+    _reverse_document(database_path, document_id, expected_version, created_by, action="void", status="voided")
+
+
+def red_flush_document(database_path: str, document_id: int, expected_version: int | str | None, created_by: str = "") -> str:
+    return _reverse_document(database_path, document_id, expected_version, created_by, action="red_flush", status="reversed")
+
+
 def create_account_entry(
     database_path: str,
     partner_id: int,
@@ -779,7 +894,199 @@ def create_account_entry(
             """,
             (entry_no, partner_id, account_type, direction, abs(amount), source_type, source_no, note, created_by, ts),
         )
+        row = conn.execute("SELECT id FROM account_entries WHERE entry_no = ?", (entry_no,)).fetchone()
+        _log_operation(
+            conn,
+            "account_entry",
+            int(row["id"]),
+            "create",
+            "新增账目明细",
+            f"{account_type}/{direction} {abs(amount):.2f}，来源：{source_no or '-'}",
+            created_by,
+        )
         conn.commit()
+
+
+def _document_lines_from_form(form: dict) -> list[dict]:
+    item_ids = _form_list(form, "item_id")
+    warehouse_ids = _form_list(form, "warehouse_id")
+    quantities = _form_list(form, "quantity")
+    prices = _form_list(form, "unit_cost" if "unit_cost" in form else "sale_price")
+    lines = []
+    for idx, item_id in enumerate(item_ids):
+        if not item_id:
+            continue
+        qty = _num(quantities[idx])
+        if qty <= 0:
+            continue
+        lines.append(
+            {
+                "item_id": int(item_id),
+                "warehouse_id": int(warehouse_ids[idx]),
+                "quantity": qty,
+                "unit_price": _num(prices[idx]),
+            }
+        )
+    if not lines:
+        raise ValueError("单据明细不能为空")
+    return lines
+
+
+def _replace_document_lines(conn, document_id: int, lines: list[dict]) -> None:
+    conn.execute("DELETE FROM document_lines WHERE document_id = ?", (document_id,))
+    for line in lines:
+        qty = abs(float(line["quantity"]))
+        unit_price = float(line["unit_price"])
+        conn.execute(
+            """
+            INSERT INTO document_lines (
+                document_id, item_id, warehouse_id, quantity, unit_price, line_amount, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                document_id,
+                int(line["item_id"]),
+                int(line["warehouse_id"]),
+                qty,
+                unit_price,
+                qty * unit_price,
+                str(line.get("note", "")),
+            ),
+        )
+
+
+def _validate_document_lines(conn, document_type: str, lines: list[dict], document_id: int | None = None) -> None:
+    if document_type != "sale":
+        return
+    previous_by_key: dict[tuple[int, int], float] = {}
+    if document_id:
+        for row in conn.execute(
+            """
+            SELECT dl.item_id, dl.warehouse_id, dl.quantity
+            FROM document_lines dl
+            WHERE dl.document_id = ?
+            """,
+            (document_id,),
+        ).fetchall():
+            key = (int(row["item_id"]), int(row["warehouse_id"]))
+            previous_by_key[key] = previous_by_key.get(key, 0) + float(row["quantity"])
+    required: dict[tuple[int, int], float] = {}
+    for line in lines:
+        key = (int(line["item_id"]), int(line["warehouse_id"]))
+        required[key] = required.get(key, 0) + abs(float(line["quantity"]))
+    for (item_id, warehouse_id), required_qty in required.items():
+        current_qty = _stock_quantity(conn, item_id, warehouse_id) + previous_by_key.get((item_id, warehouse_id), 0)
+        if current_qty < required_qty - 0.000001:
+            item = conn.execute("SELECT item_name FROM items WHERE id = ?", (item_id,)).fetchone()
+            item_name = item["item_name"] if item else str(item_id)
+            raise ValueError(f"{item_name} 库存不足：当前库存 {current_qty:g}，本次销售 {required_qty:g}")
+
+
+def _delete_document_effects(conn, document_no: str, document_id: int, document_type: str) -> None:
+    conn.execute("DELETE FROM stock_movements WHERE document_id = ? OR (source_type = ? AND source_no = ?)", (document_id, document_type, document_no))
+    conn.execute("DELETE FROM account_entries WHERE source_type = ? AND source_no = ?", (document_type, document_no))
+
+
+def _apply_document_effects(
+    database_path: str,
+    document_id: int,
+    document_type: str,
+    document_no: str,
+    partner_id: int,
+    lines: list[dict],
+    created_by: str = "",
+) -> None:
+    movement_type = "purchase_in" if document_type == "purchase" else "sale_out"
+    account_type = "payable" if document_type == "purchase" else "receivable"
+    account_note = "采购应付增加" if document_type == "purchase" else "销售应收增加"
+    total_amount = sum(abs(float(row["quantity"])) * float(row["unit_price"]) for row in lines)
+    for line in lines:
+        create_stock_movement(
+            database_path,
+            movement_type,
+            int(line["item_id"]),
+            int(line["warehouse_id"]),
+            float(line["quantity"]),
+            float(line["unit_price"]),
+            source_type=document_type,
+            source_no=document_no,
+            document_id=document_id,
+            partner_id=partner_id,
+            note=account_note.replace("应", ""),
+            created_by=created_by,
+        )
+    create_account_entry(
+        database_path,
+        partner_id,
+        account_type,
+        "increase",
+        total_amount,
+        document_type,
+        document_no,
+        account_note,
+        created_by,
+    )
+
+
+def _reverse_document(
+    database_path: str,
+    document_id: int,
+    expected_version: int | str | None,
+    created_by: str,
+    action: str,
+    status: str,
+) -> str:
+    ts = now()
+    with get_connection(database_path) as conn:
+        document = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        _require_row_version(document, expected_version, "单据")
+        if document["status"] != "confirmed":
+            raise ValueError("当前状态不能执行该操作")
+        lines = [dict(row) for row in conn.execute("SELECT * FROM document_lines WHERE document_id = ?", (document_id,)).fetchall()]
+        if not lines:
+            raise ValueError("单据明细不存在")
+        reverse_no = f"{'VOID' if action == 'void' else 'RED'}-{document['document_no']}"
+        conn.execute(
+            """
+            UPDATE documents
+            SET status = ?, updated_at = ?, row_version = row_version + 1, reversed_document_no = ?, voided_at = ?, voided_by = ?
+            WHERE id = ?
+            """,
+            (status, ts, reverse_no, ts if action == "void" else None, created_by if action == "void" else None, document_id),
+        )
+        _log_operation(conn, "document", document_id, action, "单据冲销", f"冲销单号：{reverse_no}", created_by)
+        conn.commit()
+    reverse_source_type = f"{document['document_type']}_{action}"
+    reverse_movement_type = "adjust_out" if document["document_type"] == "purchase" else "return_in"
+    reverse_direction = "decrease"
+    for line in lines:
+        unit_cost = float(line["unit_price"])
+        create_stock_movement(
+            database_path,
+            reverse_movement_type,
+            int(line["item_id"]),
+            int(line["warehouse_id"]),
+            float(line["quantity"]),
+            unit_cost,
+            source_type=reverse_source_type,
+            source_no=reverse_no,
+            document_id=document_id,
+            partner_id=document["partner_id"],
+            note=f"{'作废' if action == 'void' else '红冲'}原单 {document['document_no']}",
+            created_by=created_by,
+        )
+    create_account_entry(
+        database_path,
+        int(document["partner_id"]),
+        "payable" if document["document_type"] == "purchase" else "receivable",
+        reverse_direction,
+        abs(float(document["total_amount"] or 0)),
+        reverse_source_type,
+        reverse_no,
+        f"{'作废' if action == 'void' else '红冲'}原单 {document['document_no']}",
+        created_by,
+    )
+    return reverse_no
 
 
 def list_stock(database_path: str) -> list[dict]:
@@ -975,20 +1282,7 @@ def list_account_entries(
 
 def create_sales_order(database_path: str, form: dict, created_by: str = "") -> dict:
     order_no = str(form.get("order_no", "")).strip() or f"SO{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-    item_ids = _form_list(form, "item_id")
-    quantities = _form_list(form, "quantity")
-    prices = _form_list(form, "sale_price")
-    lines = []
-    for index, item_id in enumerate(item_ids):
-        if not item_id:
-            continue
-        qty = _num(quantities[index])
-        if qty <= 0:
-            continue
-        price = _num(prices[index])
-        lines.append({"item_id": int(item_id), "quantity": qty, "sale_price": price, "line_amount": qty * price})
-    if not lines:
-        raise ValueError("订单明细不能为空")
+    lines = _sales_order_lines_from_form(form)
     total_amount = sum(row["line_amount"] for row in lines)
     ts = now()
     warehouse_id = int(form.get("warehouse_id") or default_warehouse_id(database_path))
@@ -997,17 +1291,17 @@ def create_sales_order(database_path: str, form: dict, created_by: str = "") -> 
         if existing:
             raise ValueError("订单号已存在")
         cur = conn.execute(
-                """
-                INSERT INTO sales_orders (
-                    order_no, source_channel, platform, shop_name, customer_id, customer_name, status, warehouse_id,
-                    total_amount, note, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    order_no,
-                    str(form.get("source_channel", "manual")).strip() or "manual",
-                    str(form.get("platform", "")).strip() or "拼多多",
-                    str(form.get("shop_name", "")).strip(),
+            """
+            INSERT INTO sales_orders (
+                order_no, source_channel, platform, shop_name, customer_id, customer_name, status, warehouse_id,
+                total_amount, note, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order_no,
+                str(form.get("source_channel", "manual")).strip() or "manual",
+                str(form.get("platform", "")).strip() or "拼多多",
+                str(form.get("shop_name", "")).strip(),
                 int(form.get("customer_id") or 0) or None,
                 str(form.get("customer_name", "")).strip(),
                 warehouse_id,
@@ -1019,18 +1313,167 @@ def create_sales_order(database_path: str, form: dict, created_by: str = "") -> 
             ),
         )
         order_id = cur.lastrowid
-        for line in lines:
-            conn.execute(
-                """
-                INSERT INTO sales_order_lines (
-                    sales_order_id, item_id, quantity, sale_price, line_amount
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (order_id, line["item_id"], line["quantity"], line["sale_price"], line["line_amount"]),
-            )
+        _replace_order_lines(conn, order_id, lines)
+        _log_operation(conn, "sales_order", order_id, "create", "新建订单", f"订单号：{order_no}，金额：{total_amount:.2f}", created_by)
         conn.commit()
         row = conn.execute("SELECT * FROM sales_orders WHERE id = ?", (order_id,)).fetchone()
         return dict(row)
+
+
+def update_sales_order(database_path: str, order_id: int, form: dict, updated_by: str = "") -> dict:
+    lines = _sales_order_lines_from_form(form)
+    total_amount = sum(row["line_amount"] for row in lines)
+    ts = now()
+    with get_connection(database_path) as conn:
+        existing = conn.execute("SELECT * FROM sales_orders WHERE id = ?", (order_id,)).fetchone()
+        _require_row_version(existing, form.get("expected_version"), "订单")
+        if existing["status"] not in {"pending_review", "locked"}:
+            raise ValueError("当前状态不能编辑订单")
+        order_no = str(form.get("order_no", "")).strip() or existing["order_no"]
+        duplicate = conn.execute(
+            "SELECT id FROM sales_orders WHERE order_no = ? AND id <> ?",
+            (order_no, order_id),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("订单号已存在")
+        was_locked = existing["status"] == "locked"
+        conn.execute(
+            """
+            UPDATE sales_orders
+            SET order_no = ?, platform = ?, shop_name = ?, customer_id = ?, customer_name = ?, warehouse_id = ?,
+                total_amount = ?, note = ?, updated_at = ?, row_version = row_version + 1
+            WHERE id = ?
+            """,
+            (
+                order_no,
+                str(form.get("platform", "")).strip() or "拼多多",
+                str(form.get("shop_name", "")).strip(),
+                int(form.get("customer_id") or 0) or None,
+                str(form.get("customer_name", "")).strip(),
+                int(form.get("warehouse_id") or default_warehouse_id(database_path)),
+                total_amount,
+                str(form.get("note", "")).strip(),
+                ts,
+                order_id,
+            ),
+        )
+        _replace_order_lines(conn, order_id, lines)
+        conn.execute(
+            "UPDATE stock_locks SET status='released', released_at=? WHERE source_type='sales_order' AND source_id=? AND status='locked'",
+            (ts, order_id),
+        )
+        if was_locked:
+            _lock_sales_order_in_tx(conn, order_id, ts)
+        _log_operation(conn, "sales_order", order_id, "update", "编辑订单", f"订单号：{order_no}，金额：{total_amount:.2f}", updated_by)
+        conn.commit()
+        row = conn.execute("SELECT * FROM sales_orders WHERE id = ?", (order_id,)).fetchone()
+        return dict(row)
+
+
+def void_sales_order(database_path: str, order_id: int, expected_version: int | str | None, created_by: str = "") -> None:
+    ts = now()
+    with get_connection(database_path) as conn:
+        order = conn.execute("SELECT * FROM sales_orders WHERE id = ?", (order_id,)).fetchone()
+        _require_row_version(order, expected_version, "订单")
+        if order["status"] not in {"pending_review", "locked"}:
+            raise ValueError("当前状态不能作废订单")
+        conn.execute(
+            "UPDATE stock_locks SET status='released', released_at=? WHERE source_type='sales_order' AND source_id=? AND status='locked'",
+            (ts, order_id),
+        )
+        conn.execute(
+            "UPDATE sales_orders SET status='cancelled', updated_at=?, row_version=row_version+1 WHERE id=?",
+            (ts, order_id),
+        )
+        _log_operation(conn, "sales_order", order_id, "void", "作废订单", f"订单号：{order['order_no']}", created_by)
+        conn.commit()
+
+
+def red_flush_sales_order(database_path: str, order_id: int, expected_version: int | str | None, created_by: str = "") -> str:
+    ts = now()
+    with get_connection(database_path) as conn:
+        order = conn.execute("SELECT * FROM sales_orders WHERE id = ?", (order_id,)).fetchone()
+        _require_row_version(order, expected_version, "订单")
+        if order["status"] != "shipped":
+            raise ValueError("只有已发货订单才能红冲")
+        if order["reversed_order_no"]:
+            raise ValueError("该订单已经红冲")
+        lines = [dict(row) for row in conn.execute("SELECT * FROM sales_order_lines WHERE sales_order_id = ?", (order_id,)).fetchall()]
+        red_no = f"RED-{order['order_no']}"
+        if conn.execute("SELECT id FROM sales_orders WHERE order_no = ?", (red_no,)).fetchone():
+            raise ValueError("红冲单号已存在")
+        cur = conn.execute(
+            """
+            INSERT INTO sales_orders (
+                order_no, source_channel, platform, shop_name, customer_id, customer_name, status, warehouse_id,
+                total_amount, shipped_at, logistics_company, tracking_no, note, created_by, created_at, updated_at, reversed_order_no
+            ) VALUES (?, 'system', ?, ?, ?, ?, 'reversed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                red_no,
+                order["platform"],
+                order["shop_name"],
+                order["customer_id"],
+                order["customer_name"],
+                order["warehouse_id"],
+                -abs(float(order["total_amount"] or 0)),
+                ts,
+                order["logistics_company"],
+                f"RED-{order['tracking_no']}" if order["tracking_no"] else "",
+                f"红冲原订单 {order['order_no']}",
+                created_by,
+                ts,
+                ts,
+                order["order_no"],
+            ),
+        )
+        red_order_id = cur.lastrowid
+        for line in lines:
+            conn.execute(
+                """
+                INSERT INTO sales_order_lines (sales_order_id, item_id, quantity, sale_price, line_amount, shipped_quantity)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (red_order_id, line["item_id"], -abs(float(line["quantity"])), line["sale_price"], -abs(float(line["line_amount"])), 0),
+            )
+        conn.execute(
+            """
+            UPDATE sales_orders
+            SET status='reversed', updated_at=?, row_version=row_version+1, reversed_order_no=?
+            WHERE id=?
+            """,
+            (ts, red_no, order_id),
+        )
+        _log_operation(conn, "sales_order", order_id, "red_flush", "订单红冲", f"红冲单号：{red_no}", created_by)
+        _log_operation(conn, "sales_order", red_order_id, "create_red", "红冲订单", f"关联原订单：{order['order_no']}", created_by)
+        conn.commit()
+    for line in lines:
+        item = get_item(database_path, line["item_id"])
+        create_stock_movement(
+            database_path,
+            "return_in",
+            line["item_id"],
+            order["warehouse_id"],
+            abs(float(line["quantity"])),
+            item.get("cost_price") or 0 if item else 0,
+            source_type="sales_order_red",
+            source_no=red_no,
+            note=f"订单红冲回库：{order['order_no']}",
+            created_by=created_by,
+        )
+    if order["customer_id"]:
+        create_account_entry(
+            database_path,
+            order["customer_id"],
+            "receivable",
+            "decrease",
+            abs(float(order["total_amount"] or 0)),
+            "sales_order_red",
+            red_no,
+            f"订单红冲冲回应收：{order['order_no']}",
+            created_by,
+        )
+    return red_no
 
 
 def list_sales_orders(
@@ -1104,34 +1547,70 @@ def order_lines(database_path: str, order_id: int) -> list[dict]:
         ]
 
 
+def _sales_order_lines_from_form(form: dict) -> list[dict]:
+    item_ids = _form_list(form, "item_id")
+    quantities = _form_list(form, "quantity")
+    prices = _form_list(form, "sale_price")
+    lines = []
+    for index, item_id in enumerate(item_ids):
+        if not item_id:
+            continue
+        qty = _num(quantities[index])
+        if qty <= 0:
+            continue
+        price = _num(prices[index])
+        lines.append({"item_id": int(item_id), "quantity": qty, "sale_price": price, "line_amount": qty * price})
+    if not lines:
+        raise ValueError("订单明细不能为空")
+    return lines
+
+
+def _replace_order_lines(conn, order_id: int, lines: list[dict]) -> None:
+    conn.execute("DELETE FROM sales_order_lines WHERE sales_order_id = ?", (order_id,))
+    for line in lines:
+        conn.execute(
+            """
+            INSERT INTO sales_order_lines (
+                sales_order_id, item_id, quantity, sale_price, line_amount
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (order_id, line["item_id"], line["quantity"], line["sale_price"], line["line_amount"]),
+        )
+
+
+def _lock_sales_order_in_tx(conn, order_id: int, ts: str) -> None:
+    order = conn.execute("SELECT * FROM sales_orders WHERE id = ?", (order_id,)).fetchone()
+    if not order:
+        raise ValueError("订单不存在")
+    if order["status"] not in {"pending_review", "locked"}:
+        raise ValueError("当前状态不能锁库")
+    conn.execute("DELETE FROM stock_locks WHERE source_type='sales_order' AND source_id=? AND status='locked'", (order_id,))
+    lines = conn.execute("SELECT * FROM sales_order_lines WHERE sales_order_id = ?", (order_id,)).fetchall()
+    required_by_item: dict[int, float] = {}
+    for line in lines:
+        required_by_item[line["item_id"]] = required_by_item.get(line["item_id"], 0) + float(line["quantity"])
+    for item_id, required_qty in required_by_item.items():
+        available_qty = _available_quantity(conn, item_id, order["warehouse_id"])
+        if available_qty < required_qty - 0.000001:
+            item = conn.execute("SELECT item_name FROM items WHERE id = ?", (item_id,)).fetchone()
+            item_name = item["item_name"] if item else str(item_id)
+            raise ValueError(f"{item_name} 可用库存不足：当前可用 {available_qty:g}，需要锁库 {required_qty:g}")
+    for line in lines:
+        conn.execute(
+            """
+            INSERT INTO stock_locks (item_id, warehouse_id, quantity, source_type, source_id, status, created_at)
+            VALUES (?, ?, ?, 'sales_order', ?, 'locked', ?)
+            """,
+            (line["item_id"], order["warehouse_id"], line["quantity"], order_id, ts),
+        )
+    conn.execute("UPDATE sales_orders SET status='locked', locked_at=?, updated_at=?, row_version=row_version+1 WHERE id=?", (ts, ts, order_id))
+
+
 def lock_sales_order(database_path: str, order_id: int) -> None:
     ts = now()
     with get_connection(database_path) as conn:
-        order = conn.execute("SELECT * FROM sales_orders WHERE id = ?", (order_id,)).fetchone()
-        if not order:
-            raise ValueError("订单不存在")
-        if order["status"] not in {"pending_review", "locked"}:
-            raise ValueError("当前状态不能锁库")
-        conn.execute("DELETE FROM stock_locks WHERE source_type='sales_order' AND source_id=? AND status='locked'", (order_id,))
-        lines = conn.execute("SELECT * FROM sales_order_lines WHERE sales_order_id = ?", (order_id,)).fetchall()
-        required_by_item: dict[int, float] = {}
-        for line in lines:
-            required_by_item[line["item_id"]] = required_by_item.get(line["item_id"], 0) + float(line["quantity"])
-        for item_id, required_qty in required_by_item.items():
-            available_qty = _available_quantity(conn, item_id, order["warehouse_id"])
-            if available_qty < required_qty - 0.000001:
-                item = conn.execute("SELECT item_name FROM items WHERE id = ?", (item_id,)).fetchone()
-                item_name = item["item_name"] if item else str(item_id)
-                raise ValueError(f"{item_name} 可用库存不足：当前可用 {available_qty:g}，需要锁库 {required_qty:g}")
-        for line in lines:
-            conn.execute(
-                """
-                INSERT INTO stock_locks (item_id, warehouse_id, quantity, source_type, source_id, status, created_at)
-                VALUES (?, ?, ?, 'sales_order', ?, 'locked', ?)
-                """,
-                (line["item_id"], order["warehouse_id"], line["quantity"], order_id, ts),
-            )
-        conn.execute("UPDATE sales_orders SET status='locked', locked_at=?, updated_at=? WHERE id=?", (ts, ts, order_id))
+        _lock_sales_order_in_tx(conn, order_id, ts)
+        _log_operation(conn, "sales_order", order_id, "lock", "订单锁库", "", "")
         conn.commit()
 
 
@@ -1181,11 +1660,12 @@ def ship_sales_order(database_path: str, order_id: int, logistics_company: str =
         conn.execute(
             """
             UPDATE sales_orders
-            SET status='shipped', shipped_at=?, logistics_company=?, tracking_no=?, updated_at=?
+            SET status='shipped', shipped_at=?, logistics_company=?, tracking_no=?, updated_at=?, row_version=row_version+1
             WHERE id=?
             """,
             (ts, logistics_company, tracking_no, ts, order_id),
         )
+        _log_operation(conn, "sales_order", order_id, "ship", "订单发货", f"物流：{logistics_company or '-'}，快递单号：{tracking_no or '-'}", created_by)
         conn.commit()
 
 
@@ -1201,7 +1681,8 @@ def cancel_sales_order(database_path: str, order_id: int) -> None:
             "UPDATE stock_locks SET status='released', released_at=? WHERE source_type='sales_order' AND source_id=? AND status='locked'",
             (ts, order_id),
         )
-        conn.execute("UPDATE sales_orders SET status='cancelled', updated_at=? WHERE id=?", (ts, order_id))
+        conn.execute("UPDATE sales_orders SET status='cancelled', updated_at=?, row_version=row_version+1 WHERE id=?", (ts, order_id))
+        _log_operation(conn, "sales_order", order_id, "cancel", "订单取消", "", "")
         conn.commit()
 
 
@@ -1427,6 +1908,12 @@ def save_platform_settlement(database_path: str, form: dict) -> None:
     net_amount = amount - commission - freight - refund_amount
     ts = now()
     with get_connection(database_path) as conn:
+        snapshot_row = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) AS max_id, COALESCE(MAX(created_at), '') AS max_created FROM account_entries"
+        ).fetchone()
+        current_token = f"{snapshot_row['max_id']}@{snapshot_row['max_created']}"
+        if form.get("expected_accounts_snapshot") and not str(form.get("force_save") or "").strip():
+            _require_snapshot(str(current_token or ""), str(form.get("expected_accounts_snapshot") or ""), "账目")
         conn.execute(
             """
             INSERT INTO platform_settlements (
@@ -1446,6 +1933,8 @@ def save_platform_settlement(database_path: str, form: dict) -> None:
                 ts,
             ),
         )
+        settlement = conn.execute("SELECT id, settlement_no FROM platform_settlements ORDER BY id DESC LIMIT 1").fetchone()
+        _log_operation(conn, "settlement", int(settlement["id"]), "create", "新增平台对账", f"对账单号：{settlement['settlement_no']}，净额：{net_amount:.2f}", "")
         conn.commit()
 
 
@@ -1462,6 +1951,9 @@ def receive_payment(database_path: str, form: dict, created_by: str = "") -> Non
     note = str(form.get("note", "")).strip()
     if amount <= 0:
         raise ValueError("金额必须大于 0")
+    if form.get("expected_accounts_snapshot") and not str(form.get("force_save") or "").strip():
+        snapshot = latest_snapshot_tokens(database_path)["accounts"]
+        _require_snapshot(snapshot, str(form.get("expected_accounts_snapshot") or ""), "账目")
     if entry_type == "customer_receive":
         create_account_entry(database_path, partner_id, "receivable", "decrease", amount, "payment", source_no, note or "客户收款", created_by)
     elif entry_type == "supplier_pay":
@@ -1738,12 +2230,102 @@ def list_production_orders(database_path: str, limit: int = 100) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def exception_dashboard(database_path: str) -> dict:
+    with get_connection(database_path) as conn:
+        negative_stock = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT i.item_code, i.item_name, COALESCE(SUM(sm.quantity), 0) AS stock_qty
+                FROM items i
+                LEFT JOIN stock_movements sm ON sm.item_id = i.id
+                WHERE i.is_active = 1
+                GROUP BY i.id
+                HAVING stock_qty < 0
+                ORDER BY stock_qty ASC, i.item_name
+                """
+            ).fetchall()
+        ]
+        shipped_unpaid = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM (
+                    SELECT so.*, p.name AS partner_name,
+                           COALESCE((
+                               SELECT SUM(CASE WHEN ae.direction='increase' THEN ae.amount ELSE -ae.amount END)
+                               FROM account_entries ae
+                               WHERE ae.source_type = 'sales_order' AND ae.source_no = so.order_no
+                           ), 0) AS receivable_balance
+                    FROM sales_orders so
+                    LEFT JOIN partners p ON p.id = so.customer_id
+                    WHERE so.status = 'shipped'
+                ) t
+                WHERE t.receivable_balance > 0.000001
+                ORDER BY t.created_at DESC
+                LIMIT 50
+                """
+            ).fetchall()
+        ]
+        pending_returns = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT ri.*, i.item_name
+                FROM return_inbounds ri
+                LEFT JOIN items i ON i.id = ri.item_id
+                WHERE ri.status <> 'matched_inbound' OR ri.stock_movement_id IS NULL
+                ORDER BY ri.created_at DESC
+                LIMIT 50
+                """
+            ).fetchall()
+        ]
+        document_mismatch = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM (
+                    SELECT d.*, p.name AS partner_name,
+                           COALESCE((SELECT SUM(dl.line_amount) FROM document_lines dl WHERE dl.document_id = d.id), 0) AS line_total,
+                           COALESCE((
+                               SELECT SUM(CASE WHEN ae.direction='increase' THEN ae.amount ELSE -ae.amount END)
+                               FROM account_entries ae
+                               WHERE ae.source_type = d.document_type AND ae.source_no = d.document_no
+                           ), 0) AS account_total,
+                           COALESCE((
+                               SELECT SUM(ABS(sm.quantity) * sm.unit_cost)
+                               FROM stock_movements sm
+                               WHERE sm.document_id = d.id
+                           ), 0) AS movement_total
+                    FROM documents d
+                    LEFT JOIN partners p ON p.id = d.partner_id
+                    WHERE d.status = 'confirmed'
+                ) t
+                WHERE ABS(t.total_amount - t.line_total) > 0.000001
+                   OR ABS(t.total_amount - t.account_total) > 0.000001
+                   OR ABS(t.total_amount - t.movement_total) > 0.000001
+                ORDER BY t.created_at DESC
+                LIMIT 50
+                """
+            ).fetchall()
+        ]
+    return {
+        "negative_stock": negative_stock,
+        "shipped_unpaid": shipped_unpaid,
+        "pending_returns": pending_returns,
+        "document_mismatch": document_mismatch,
+    }
+
+
 def create_import_template(export_dir: str, kind: str) -> str:
     templates = {
         "items": ("商品导入模板.xlsx", ["类型", "编号", "名称", "SKU", "平台SKU", "条码", "规格", "单位", "供应商", "安全库存", "采购价", "成本价", "销售价", "采购提前期"]),
         "orders": ("订单导入模板.xlsx", ["平台", "店铺", "订单号", "商品编号或SKU", "商品名称", "数量", "销售单价", "客户姓名", "物流公司", "快递单号", "备注"]),
         "purchase": ("采购导入模板.xlsx", ["供应商", "采购单号", "商品编号或SKU", "商品名称", "数量", "采购单价", "备注"]),
         "stock": ("库存调整导入模板.xlsx", ["动作", "商品编号或SKU", "商品名称", "数量", "单价或成本", "来源单号", "备注"]),
+        "shipments": ("批量发货模板.xlsx", ["订单号", "物流公司", "快递单号"]),
     }
     if kind not in templates:
         raise ValueError("未知模板类型")
@@ -1758,6 +2340,8 @@ def create_import_template(export_dir: str, kind: str) -> str:
         ws.append(["成品货", "CP001", "测试成品", "SKU001", "PDD-SKU001", "", "默认规格", "件", "默认供应商", 10, 50, 60, 99, 3])
     elif kind == "purchase":
         ws.append(["默认供应商", "PO20260001", "CP001", "测试成品", 10, 50, ""])
+    elif kind == "shipments":
+        ws.append(["WEB20260001", "顺丰", "SF10001"])
     else:
         ws.append(["盘盈入库", "CP001", "测试成品", 1, 60, "ADJ20260001", ""])
     Path(export_dir).mkdir(parents=True, exist_ok=True)
@@ -1784,6 +2368,8 @@ def import_excel(database_path: str, file_path: str, kind: str, created_by: str 
                 _import_purchase_row(database_path, row, created_by, dry_run=dry_run)
             elif kind == "stock":
                 _import_stock_row(database_path, row, created_by, dry_run=dry_run)
+            elif kind == "shipments":
+                _import_shipment_row(database_path, row, created_by, dry_run=dry_run)
             else:
                 raise ValueError("未知导入类型")
             if dry_run:
@@ -1921,6 +2507,21 @@ def _import_stock_row(database_path: str, row: tuple, created_by: str, dry_run: 
         note=str(note or "").strip(),
         created_by=created_by,
     )
+
+
+def _import_shipment_row(database_path: str, row: tuple, created_by: str, dry_run: bool = False) -> None:
+    order_no, logistics, tracking = (list(row) + [""] * 3)[:3]
+    if not order_no or not tracking:
+        raise ValueError("订单号和快递单号不能为空")
+    with get_connection(database_path) as conn:
+        order = conn.execute("SELECT * FROM sales_orders WHERE order_no = ?", (str(order_no).strip(),)).fetchone()
+        if not order:
+            raise ValueError("订单不存在")
+        if order["status"] not in {"pending_review", "locked"}:
+            raise ValueError("订单状态不能发货")
+    if dry_run:
+        return
+    ship_sales_order(database_path, int(order["id"]), str(logistics or "").strip(), str(tracking).strip(), created_by)
 
 
 def export_report(database_path: str, export_dir: str, kind: str) -> str:

@@ -108,6 +108,11 @@ CREATE TABLE IF NOT EXISTS documents (
     source_channel TEXT NOT NULL DEFAULT 'manual',
     partner_id INTEGER,
     status TEXT NOT NULL DEFAULT 'confirmed',
+    row_version INTEGER NOT NULL DEFAULT 0,
+    reversed_from_id INTEGER,
+    reversed_document_no TEXT,
+    voided_at TEXT,
+    voided_by TEXT,
     total_amount REAL NOT NULL DEFAULT 0,
     paid_amount REAL NOT NULL DEFAULT 0,
     note TEXT,
@@ -126,6 +131,8 @@ CREATE TABLE IF NOT EXISTS sales_orders (
     customer_id INTEGER,
     customer_name TEXT,
     status TEXT NOT NULL DEFAULT 'pending_review',
+    row_version INTEGER NOT NULL DEFAULT 0,
+    reversed_order_no TEXT,
     warehouse_id INTEGER,
     total_amount REAL NOT NULL DEFAULT 0,
     locked_at TEXT,
@@ -243,6 +250,17 @@ CREATE TABLE IF NOT EXISTS account_entries (
     FOREIGN KEY(partner_id) REFERENCES partners(id)
 );
 
+CREATE TABLE IF NOT EXISTS operation_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    detail TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS bom_lines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     finished_item_id INTEGER NOT NULL,
@@ -280,6 +298,7 @@ CREATE INDEX IF NOT EXISTS idx_sales_orders_status ON sales_orders(status);
 CREATE INDEX IF NOT EXISTS idx_production_orders_item ON production_orders(finished_item_id);
 CREATE INDEX IF NOT EXISTS idx_stock_locks_item ON stock_locks(item_id, warehouse_id, status);
 CREATE INDEX IF NOT EXISTS idx_locations_warehouse ON locations(warehouse_id);
+CREATE INDEX IF NOT EXISTS idx_operation_logs_entity ON operation_logs(entity_type, entity_id, created_at);
 """
 
 
@@ -305,8 +324,11 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     migrations = {
         "users": {"role": "TEXT NOT NULL DEFAULT 'admin'"},
         "stock_movements": {"document_id": "INTEGER"},
-        "documents": {"source_channel": "TEXT NOT NULL DEFAULT 'manual'"},
-        "sales_orders": {"source_channel": "TEXT NOT NULL DEFAULT 'manual'"},
+        "sales_orders": {
+            "source_channel": "TEXT NOT NULL DEFAULT 'manual'",
+            "row_version": "INTEGER NOT NULL DEFAULT 0",
+            "reversed_order_no": "TEXT",
+        },
         "items": {
             "default_location_id": "INTEGER",
             "platform_sku": "TEXT",
@@ -315,7 +337,30 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             "is_producible": "INTEGER NOT NULL DEFAULT 0",
             "is_packaging": "INTEGER NOT NULL DEFAULT 0",
         },
+        "documents": {
+            "source_channel": "TEXT NOT NULL DEFAULT 'manual'",
+            "row_version": "INTEGER NOT NULL DEFAULT 0",
+            "reversed_from_id": "INTEGER",
+            "reversed_document_no": "TEXT",
+            "voided_at": "TEXT",
+            "voided_by": "TEXT",
+        },
     }
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS operation_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            detail TEXT,
+            created_by TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_operation_logs_entity ON operation_logs(entity_type, entity_id, created_at)")
     for table_name, columns in migrations.items():
         existing = {
             row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()

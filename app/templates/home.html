@@ -18,6 +18,12 @@
     <div><strong>{{ "%.2f"|format(stats["payable"]) }}</strong><span>供应商应付</span></div>
     <div><strong>{{ stats["pending_returns"] }}</strong><span>待匹配退货</span></div>
 </section>
+<section class="grid stats">
+    <div><strong>{{ exceptions.negative_stock|length }}</strong><span>负库存异常</span></div>
+    <div><strong>{{ exceptions.shipped_unpaid|length }}</strong><span>已发货未收款</span></div>
+    <div><strong>{{ exceptions.pending_returns|length }}</strong><span>退货未入库</span></div>
+    <div><strong>{{ exceptions.document_mismatch|length }}</strong><span>单据对账异常</span></div>
+</section>
 <section class="dashboard-grid">
     <div>
         <h2>季度卖得好</h2>

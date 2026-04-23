@@ -121,6 +121,25 @@ purchase_resp = client.post(
     follow_redirects=True,
 )
 assert purchase_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    purchase_version = conn.execute("SELECT row_version FROM documents WHERE id = 1").fetchone()[0]
+edit_purchase_resp = client.post(
+    "/purchase",
+    data={
+        "document_id": "1",
+        "expected_version": str(purchase_version),
+        "partner_id": "1",
+        "item_id": ["1"],
+        "warehouse_id": ["1"],
+        "quantity": ["8"],
+        "unit_cost": ["5.5"],
+        "source_no": "PO-TEST-EDIT",
+        "note": "更新采购单",
+    },
+    follow_redirects=True,
+)
+assert edit_purchase_resp.status_code == 200
+assert client.get("/purchase?keyword=PO-TEST-EDIT").status_code == 200
 
 stock_seed_resp = client.post(
     "/stock",
@@ -164,6 +183,24 @@ sales_resp = client.post(
     follow_redirects=True,
 )
 assert sales_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    sales_version = conn.execute("SELECT row_version FROM documents WHERE id = 2").fetchone()[0]
+edit_sales_resp = client.post(
+    "/sales",
+    data={
+        "document_id": "2",
+        "expected_version": str(sales_version),
+        "partner_id": "2",
+        "item_id": ["2"],
+        "warehouse_id": ["1"],
+        "quantity": ["2"],
+        "sale_price": ["101"],
+        "source_no": "SO-TEST-EDIT",
+        "note": "更新销售单",
+    },
+    follow_redirects=True,
+)
+assert edit_sales_resp.status_code == 200
 
 order_resp = client.post(
     "/orders",
@@ -181,10 +218,31 @@ order_resp = client.post(
     follow_redirects=True,
 )
 assert order_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    order_version = conn.execute("SELECT row_version FROM sales_orders WHERE id = 1").fetchone()[0]
+edit_order_resp = client.post(
+    "/orders",
+    data={
+        "order_id": "1",
+        "expected_version": str(order_version),
+        "order_no": "WEB-TEST-EDIT",
+        "platform": "测试平台",
+        "shop_name": "测试店铺",
+        "customer_id": "2",
+        "customer_name": "测试客户",
+        "warehouse_id": "1",
+        "item_id": ["2"],
+        "quantity": ["1"],
+        "sale_price": ["97"],
+        "note": "编辑订单",
+    },
+    follow_redirects=True,
+)
+assert edit_order_resp.status_code == 200
 assert client.get("/orders").status_code == 200
-assert client.get("/orders?status=pending_review&keyword=WEB-TEST").status_code == 200
+assert client.get("/orders?status=pending_review&keyword=WEB-TEST-EDIT").status_code == 200
 assert client.get("/orders?source_channel=manual&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
-for kind in ("items", "orders", "purchase", "stock"):
+for kind in ("items", "orders", "purchase", "stock", "shipments"):
     assert client.get(f"/template/{kind}").status_code == 200
 
 wb = Workbook()
@@ -221,30 +279,135 @@ assert ship_resp.status_code == 200
 cancel_after_ship = client.post("/warehouse-workbench", data={"action": "cancel", "order_id": "1"}, follow_redirects=True)
 assert "当前状态不能取消".encode("utf-8") in cancel_after_ship.data
 assert client.get("/orders/1").status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    red_order_version = conn.execute("SELECT row_version FROM sales_orders WHERE id = 1").fetchone()[0]
+red_order_resp = client.post("/orders/1/action", data={"action": "red_flush", "expected_version": str(red_order_version)}, follow_redirects=True)
+assert red_order_resp.status_code == 200
 
+accounts_page = client.get("/accounts")
+accounts_snapshot = re.search(rb'name="expected_accounts_snapshot" value="([^"]*)"', accounts_page.data).group(1).decode()
 pay_resp = client.post(
     "/accounts",
-    data={"entry_type": "customer_receive", "partner_id": "2", "amount": "50", "source_no": "PAY-TEST"},
+    data={"entry_type": "customer_receive", "partner_id": "2", "amount": "50", "source_no": "PAY-TEST", "expected_accounts_snapshot": accounts_snapshot},
     follow_redirects=True,
 )
 assert pay_resp.status_code == 200
+stale_account_resp = client.post(
+    "/accounts",
+    data={"entry_type": "customer_receive", "partner_id": "2", "amount": "10", "source_no": "PAY-STALE", "expected_accounts_snapshot": accounts_snapshot},
+    follow_redirects=True,
+)
+assert "账目页面已经有新数据写入".encode("utf-8") in stale_account_resp.data
 settlement_resp = client.post(
     "/accounts",
-    data={"action": "settlement", "settlement_no": "SET-TEST", "platform": "测试平台", "amount": "100", "commission": "5", "freight": "3", "refund_amount": "2"},
+    data={"action": "settlement", "settlement_no": "SET-TEST", "platform": "测试平台", "amount": "100", "commission": "5", "freight": "3", "refund_amount": "2", "expected_accounts_snapshot": ""},
     follow_redirects=True,
 )
 assert settlement_resp.status_code == 200
-assert client.get("/purchase?keyword=PO-TEST").status_code == 200
-assert client.get("/sales?keyword=SO-TEST").status_code == 200
+assert client.get("/purchase?keyword=PO-TEST-EDIT").status_code == 200
+assert client.get("/sales?keyword=SO-TEST-EDIT").status_code == 200
 assert client.get("/purchase?source_channel=manual&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
 assert client.get("/sales?source_channel=manual&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
 assert client.get("/stock?movement_type=adjust_in&movement_keyword=SEED-FINISHED&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
 assert client.get("/accounts?source_type=payment&keyword=PAY-TEST&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
-assert client.get("/documents/purchase/1").status_code == 200
-assert client.get("/documents/sale/2").status_code == 200
+purchase_detail = client.get("/documents/purchase/1")
+assert purchase_detail.status_code == 200
+assert "操作日志".encode("utf-8") in purchase_detail.data
+sales_detail = client.get("/documents/sale/2")
+assert sales_detail.status_code == 200
+assert "操作日志".encode("utf-8") in sales_detail.data
 assert client.get("/orders?copy_id=1").status_code == 200
 assert client.get("/purchase?copy_id=1").status_code == 200
 assert client.get("/sales?copy_id=2").status_code == 200
+assert client.get("/exceptions").status_code == 200
+
+stock_page = client.get("/stock")
+stock_snapshot = re.search(rb'name="expected_stock_snapshot" value="([^"]*)"', stock_page.data).group(1).decode()
+fresh_stock_resp = client.post(
+    "/stock",
+    data={
+        "movement_type": "adjust_in",
+        "item_id": "1",
+        "warehouse_id": "1",
+        "quantity": "1",
+        "unit_cost": "5",
+        "source_no": "SNAP-OK",
+        "expected_stock_snapshot": stock_snapshot,
+    },
+    follow_redirects=True,
+)
+assert fresh_stock_resp.status_code == 200
+stale_stock_resp = client.post(
+    "/stock",
+    data={
+        "movement_type": "adjust_in",
+        "item_id": "1",
+        "warehouse_id": "1",
+        "quantity": "1",
+        "unit_cost": "5",
+        "source_no": "SNAP-STALE",
+        "expected_stock_snapshot": stock_snapshot,
+    },
+    follow_redirects=True,
+)
+assert "库存页面已有新流水".encode("utf-8") in stale_stock_resp.data
+
+void_order_resp = client.post(
+    "/orders",
+    data={
+        "order_no": "VOID-ORDER",
+        "platform": "测试平台",
+        "shop_name": "测试店铺",
+        "customer_id": "2",
+        "customer_name": "测试客户",
+        "warehouse_id": "1",
+        "item_id": ["2"],
+        "quantity": ["1"],
+        "sale_price": ["88"],
+    },
+    follow_redirects=True,
+)
+assert void_order_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    void_order = conn.execute("SELECT id, row_version FROM sales_orders WHERE order_no = 'VOID-ORDER'").fetchone()
+void_action_resp = client.post(f"/orders/{void_order[0]}/action", data={"action": "void", "expected_version": str(void_order[1])}, follow_redirects=True)
+assert void_action_resp.status_code == 200
+
+void_purchase_resp = client.post(
+    "/purchase",
+    data={
+        "partner_id": "1",
+        "item_id": ["1"],
+        "warehouse_id": ["1"],
+        "quantity": ["1"],
+        "unit_cost": ["5"],
+        "source_no": "PO-VOID",
+    },
+    follow_redirects=True,
+)
+assert void_purchase_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    void_purchase = conn.execute("SELECT id, row_version FROM documents WHERE document_no = 'PO-VOID'").fetchone()
+void_purchase_action = client.post(f"/documents/purchase/{void_purchase[0]}/action", data={"action": "void", "expected_version": str(void_purchase[1])}, follow_redirects=True)
+assert void_purchase_action.status_code == 200
+
+red_sales_resp = client.post(
+    "/sales",
+    data={
+        "partner_id": "2",
+        "item_id": ["2"],
+        "warehouse_id": ["1"],
+        "quantity": ["1"],
+        "sale_price": ["90"],
+        "source_no": "SO-RED",
+    },
+    follow_redirects=True,
+)
+assert red_sales_resp.status_code == 200
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    red_sale = conn.execute("SELECT id, row_version FROM documents WHERE document_no = 'SO-RED'").fetchone()
+red_sale_action = client.post(f"/documents/sale/{red_sale[0]}/action", data={"action": "red_flush", "expected_version": str(red_sale[1])}, follow_redirects=True)
+assert red_sale_action.status_code == 200
 
 client.post(
     "/production",
@@ -307,9 +470,24 @@ assert client.get("/returns/1").status_code == 200
 assert client.get("/stock").status_code == 200
 assert client.get("/returns").status_code == 200
 assert client.get("/warehouse-workbench").status_code == 200
-assert client.get("/warehouse-workbench?status=shipped&keyword=WEB-TEST&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
+assert client.get("/warehouse-workbench?status=shipped&keyword=WEB-TEST-EDIT&date_from=2026-01-01&date_to=2026-12-31").status_code == 200
 batch_lock = client.post("/warehouse-workbench", data={"action": "lock", "order_ids": ["2"]}, follow_redirects=True)
 assert batch_lock.status_code == 200
+
+ship_wb = Workbook()
+ship_ws = ship_wb.active
+ship_ws.append(["订单号", "物流公司", "快递单号"])
+ship_ws.append(["PDD-IMPORT-1", "中通", "ZT-IMPORT-1"])
+ship_buf = BytesIO()
+ship_wb.save(ship_buf)
+ship_buf.seek(0)
+ship_import_resp = client.post(
+    "/warehouse-workbench/import-shipments",
+    data={"file": (ship_buf, "shipments.xlsx")},
+    content_type="multipart/form-data",
+    follow_redirects=True,
+)
+assert ship_import_resp.status_code == 200
 for kind in ("stock", "accounts", "returns", "purchase", "sales", "orders", "settlements"):
     assert client.get(f"/export/{kind}").status_code == 200
 print("Self test passed.")

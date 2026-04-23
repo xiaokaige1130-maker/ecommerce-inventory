@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import wraps
+import json
 import secrets
 
 from pathlib import Path
@@ -27,6 +28,7 @@ ROLE_NAV_ITEMS = {
         ("main.partners", "客户供应商"),
         ("main.accounts", "财务对账"),
         ("main.returns", "售后退货"),
+        ("main.exceptions", "异常看板"),
         ("main.users", "账号"),
     ],
     "boss": [
@@ -39,6 +41,7 @@ ROLE_NAV_ITEMS = {
         ("main.stock", "库存中心"),
         ("main.production", "生产组装"),
         ("main.returns", "售后退货"),
+        ("main.exceptions", "异常看板"),
     ],
     "purchase": [
         ("main.home", "首页"),
@@ -51,11 +54,13 @@ ROLE_NAV_ITEMS = {
         ("main.orders", "订单中心"),
         ("main.sales", "销售单"),
         ("main.partners", "客户供应商"),
+        ("main.exceptions", "异常看板"),
     ],
     "finance": [
         ("main.home", "首页"),
         ("main.partners", "客户供应商"),
         ("main.accounts", "财务对账"),
+        ("main.exceptions", "异常看板"),
     ],
     "staff": [
         ("main.home", "首页"),
@@ -67,6 +72,7 @@ IMPORT_KIND_META = {
     "orders": {"label": "订单", "endpoint": "main.orders"},
     "purchase": {"label": "采购入库", "endpoint": "main.purchase"},
     "stock": {"label": "库存调整", "endpoint": "main.stock"},
+    "shipments": {"label": "批量发货", "endpoint": "main.warehouse_workbench"},
 }
 
 
@@ -113,6 +119,7 @@ def order_status_name(value: str) -> str:
         "locked": "已锁库",
         "shipped": "已发货",
         "cancelled": "已取消",
+        "reversed": "已红冲",
     }.get(value, value or "-")
 
 
@@ -126,6 +133,11 @@ def source_channel_name(value: str) -> str:
         "purchase": "采购单",
         "sale": "销售单",
         "sales_order": "订单发货",
+        "sales_order_red": "订单红冲",
+        "purchase_void": "采购作废",
+        "sale_void": "销售作废",
+        "purchase_red_flush": "采购红冲",
+        "sale_red_flush": "销售红冲",
         "payment": "收付款",
         "return_system": "API推送",
         "return_system_db": "系统同步",
@@ -241,11 +253,13 @@ def home():
         database_path,
         current_app.config["RETURN_SYSTEM_DATABASE_PATH"],
     )
+    exception_data = repositories.exception_dashboard(database_path)
     context = {
         "home_role": role,
         "dashboard": dashboard,
         "stats": dashboard["stats"],
         "movements": repositories.recent_movements(database_path, limit=10),
+        "exceptions": exception_data,
     }
     if role in {"admin", "boss"}:
         context["home_mode"] = "owner"
@@ -295,6 +309,14 @@ def home():
     return render_template("home.html", **context)
 
 
+@main_bp.route("/exceptions")
+@login_required
+@roles_required("admin", "warehouse", "sales", "finance")
+def exceptions():
+    database_path = current_app.config["DATABASE_PATH"]
+    return render_template("exceptions.html", dashboard=repositories.exception_dashboard(database_path))
+
+
 @main_bp.route("/orders/<int:order_id>")
 @login_required
 @roles_required("admin", "sales", "warehouse")
@@ -305,7 +327,7 @@ def order_detail(order_id: int):
         flash("订单不存在", "danger")
         return redirect(url_for("main.orders"))
     lines = repositories.order_lines(database_path, order_id)
-    return render_template("order_detail.html", order=order, lines=lines)
+    return render_template("order_detail.html", order=order, lines=lines, logs=repositories.list_operation_logs(database_path, "sales_order", order_id))
 
 
 @main_bp.route("/returns/<int:return_id>")
@@ -319,7 +341,7 @@ def return_detail(return_id: int):
         return redirect(url_for("main.returns"))
     payload = row.get("raw_payload") or ""
     try:
-        payload_data = __import__("json").loads(payload)
+        payload_data = json.loads(payload)
     except Exception:
         payload_data = {}
     after_sales_rows = repositories.list_after_sales_by_tracking(database_path, row["tracking_no"])
@@ -339,7 +361,47 @@ def document_detail(document_type: str, document_id: int):
         flash("单据不存在", "danger")
         return redirect(url_for("main.purchase" if document_type == "purchase" else "main.sales"))
     lines = repositories.document_lines(database_path, document_id)
-    return render_template("document_detail.html", document=document, lines=lines)
+    return render_template("document_detail.html", document=document, lines=lines, logs=repositories.list_operation_logs(database_path, "document", document_id))
+
+
+@main_bp.route("/orders/<int:order_id>/action", methods=["POST"])
+@login_required
+@roles_required("admin", "sales", "warehouse")
+def order_action(order_id: int):
+    action = str(request.form.get("action", "")).strip()
+    database_path = current_app.config["DATABASE_PATH"]
+    try:
+        if action == "void":
+            repositories.void_sales_order(database_path, order_id, request.form.get("expected_version"), session.get("username", ""))
+            flash("订单已作废", "success")
+        elif action == "red_flush":
+            red_no = repositories.red_flush_sales_order(database_path, order_id, request.form.get("expected_version"), session.get("username", ""))
+            flash(f"订单已红冲：{red_no}", "success")
+        else:
+            flash("未知操作", "danger")
+    except Exception as exc:
+        flash(f"操作失败：{exc}", "danger")
+    return redirect(request.referrer or url_for("main.order_detail", order_id=order_id))
+
+
+@main_bp.route("/documents/<document_type>/<int:document_id>/action", methods=["POST"])
+@login_required
+@roles_required("admin", "purchase", "sales", "finance")
+def document_action(document_type: str, document_id: int):
+    database_path = current_app.config["DATABASE_PATH"]
+    try:
+        action = str(request.form.get("action", "")).strip()
+        if action == "void":
+            repositories.void_document(database_path, document_id, request.form.get("expected_version"), session.get("username", ""))
+            flash("单据已作废", "success")
+        elif action == "red_flush":
+            red_no = repositories.red_flush_document(database_path, document_id, request.form.get("expected_version"), session.get("username", ""))
+            flash(f"单据已红冲：{red_no}", "success")
+        else:
+            flash("未知操作", "danger")
+    except Exception as exc:
+        flash(f"操作失败：{exc}", "danger")
+    return redirect(request.referrer or url_for("main.document_detail", document_type=document_type, document_id=document_id))
 
 
 @main_bp.route("/template/<kind>")
@@ -454,6 +516,10 @@ def stock():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
         try:
+            snapshots = repositories.latest_snapshot_tokens(database_path)
+            if request.form.get("expected_stock_snapshot") and not request.form.get("force_save"):
+                if snapshots["stock"] != str(request.form.get("expected_stock_snapshot") or ""):
+                    raise ValueError("库存页面已有新流水，请刷新确认后再保存")
             repositories.create_stock_movement(
                 database_path,
                 str(request.form.get("movement_type", "")).strip(),
@@ -485,6 +551,7 @@ def stock():
         current_movement_type=movement_type,
         date_from=date_from,
         date_to=date_to,
+        stock_snapshot=repositories.latest_snapshot_tokens(database_path)["stock"],
     )
 
 
@@ -495,19 +562,24 @@ def purchase():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
         try:
-            supplier_id = int(request.form.get("supplier_id"))
-            source_no = str(request.form.get("source_no", "")).strip()
-            repositories.create_document(
-                database_path,
-                "purchase",
-                partner_id=supplier_id,
-                lines=_lines_from_form(request.form, "unit_cost"),
-                source_no=source_no,
-                note=str(request.form.get("note", "")).strip(),
-                created_by=session.get("username", ""),
-                source_channel="manual",
-            )
-            flash("采购入库和应付账款已保存", "success")
+            document_id = int(request.form.get("document_id") or 0)
+            if document_id:
+                repositories.update_document(database_path, document_id, request.form, session.get("username", ""))
+                flash("采购单已更新", "success")
+            else:
+                supplier_id = int(request.form.get("partner_id") or request.form.get("supplier_id"))
+                source_no = str(request.form.get("source_no", "")).strip()
+                repositories.create_document(
+                    database_path,
+                    "purchase",
+                    partner_id=supplier_id,
+                    lines=_lines_from_form(request.form, "unit_cost"),
+                    source_no=source_no,
+                    note=str(request.form.get("note", "")).strip(),
+                    created_by=session.get("username", ""),
+                    source_channel="manual",
+                )
+                flash("采购入库和应付账款已保存", "success")
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.purchase"))
@@ -516,9 +588,12 @@ def purchase():
     date_from = str(request.args.get("date_from", "")).strip()
     date_to = str(request.args.get("date_to", "")).strip()
     copy_id = int(request.args.get("copy_id") or 0)
+    edit_id = int(request.args.get("edit_id") or 0)
+    editing_document = repositories.get_document(database_path, edit_id) if edit_id else None
     copy_document = repositories.get_document(database_path, copy_id) if copy_id else None
+    edit_lines = repositories.document_lines(database_path, edit_id) if editing_document else []
     copy_lines = repositories.document_lines(database_path, copy_id) if copy_document else []
-    form_lines = _seed_form_lines(copy_lines, price_key="unit_price")
+    form_lines = _seed_form_lines(edit_lines or copy_lines, price_key="unit_price")
     return render_template(
         "purchase.html",
         items=repositories.list_items(database_path),
@@ -532,6 +607,7 @@ def purchase():
         date_from=date_from,
         date_to=date_to,
         copy_document=copy_document,
+        editing_document=editing_document,
         form_lines=form_lines,
     )
 
@@ -543,19 +619,24 @@ def sales():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
         try:
-            customer_id = int(request.form.get("customer_id"))
-            source_no = str(request.form.get("source_no", "")).strip()
-            repositories.create_document(
-                database_path,
-                "sale",
-                partner_id=customer_id,
-                lines=_lines_from_form(request.form, "sale_price"),
-                source_no=source_no,
-                note=str(request.form.get("note", "")).strip(),
-                created_by=session.get("username", ""),
-                source_channel="manual",
-            )
-            flash("销售出库和应收账款已保存", "success")
+            document_id = int(request.form.get("document_id") or 0)
+            if document_id:
+                repositories.update_document(database_path, document_id, request.form, session.get("username", ""))
+                flash("销售单已更新", "success")
+            else:
+                customer_id = int(request.form.get("partner_id") or request.form.get("customer_id"))
+                source_no = str(request.form.get("source_no", "")).strip()
+                repositories.create_document(
+                    database_path,
+                    "sale",
+                    partner_id=customer_id,
+                    lines=_lines_from_form(request.form, "sale_price"),
+                    source_no=source_no,
+                    note=str(request.form.get("note", "")).strip(),
+                    created_by=session.get("username", ""),
+                    source_channel="manual",
+                )
+                flash("销售出库和应收账款已保存", "success")
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.sales"))
@@ -564,9 +645,12 @@ def sales():
     date_from = str(request.args.get("date_from", "")).strip()
     date_to = str(request.args.get("date_to", "")).strip()
     copy_id = int(request.args.get("copy_id") or 0)
+    edit_id = int(request.args.get("edit_id") or 0)
+    editing_document = repositories.get_document(database_path, edit_id) if edit_id else None
     copy_document = repositories.get_document(database_path, copy_id) if copy_id else None
+    edit_lines = repositories.document_lines(database_path, edit_id) if editing_document else []
     copy_lines = repositories.document_lines(database_path, copy_id) if copy_document else []
-    form_lines = _seed_form_lines(copy_lines, price_key="unit_price")
+    form_lines = _seed_form_lines(edit_lines or copy_lines, price_key="unit_price")
     return render_template(
         "sales.html",
         items=repositories.list_items(database_path, "finished"),
@@ -579,6 +663,7 @@ def sales():
         date_from=date_from,
         date_to=date_to,
         copy_document=copy_document,
+        editing_document=editing_document,
         form_lines=form_lines,
     )
 
@@ -590,8 +675,13 @@ def orders():
     database_path = current_app.config["DATABASE_PATH"]
     if request.method == "POST":
         try:
-            repositories.create_sales_order(database_path, request.form, session.get("username", ""))
-            flash("销售订单已保存，仓库可在仓库作业页锁库/发货", "success")
+            order_id = int(request.form.get("order_id") or 0)
+            if order_id:
+                repositories.update_sales_order(database_path, order_id, request.form, session.get("username", ""))
+                flash("订单已更新", "success")
+            else:
+                repositories.create_sales_order(database_path, request.form, session.get("username", ""))
+                flash("销售订单已保存，仓库可在仓库作业页锁库/发货", "success")
         except Exception as exc:
             flash(f"订单保存失败：{exc}", "danger")
         return redirect(url_for("main.orders"))
@@ -600,9 +690,12 @@ def orders():
     date_from = str(request.args.get("date_from", "")).strip()
     date_to = str(request.args.get("date_to", "")).strip()
     copy_id = int(request.args.get("copy_id") or 0)
+    edit_id = int(request.args.get("edit_id") or 0)
+    editing_order = repositories.get_sales_order(database_path, edit_id) if edit_id else None
     copy_order = repositories.get_sales_order(database_path, copy_id) if copy_id else None
+    edit_lines = repositories.order_lines(database_path, edit_id) if editing_order else []
     copy_lines = repositories.order_lines(database_path, copy_id) if copy_order else []
-    form_lines = _seed_form_lines(copy_lines, price_key="sale_price")
+    form_lines = _seed_form_lines(edit_lines or copy_lines, price_key="sale_price")
     return render_template(
         "orders.html",
         rows=repositories.list_sales_orders(
@@ -624,6 +717,7 @@ def orders():
         date_to=date_to,
         platforms=repositories.PLATFORMS,
         copy_order=copy_order,
+        editing_order=editing_order,
         form_lines=form_lines,
     )
 
@@ -648,8 +742,15 @@ def warehouse_workbench():
             elif action == "ship":
                 logistics_company = str(request.form.get("logistics_company", "")).strip()
                 tracking_no = str(request.form.get("tracking_no", "")).strip()
+                tracking_prefix = str(request.form.get("tracking_prefix", "")).strip()
+                seq_start = int(request.form.get("tracking_start") or 1)
+                seq_width = int(request.form.get("tracking_width") or 3)
                 for idx, order_id in enumerate(target_ids):
-                    order_tracking = tracking_no if len(target_ids) == 1 else (f"{tracking_no}-{idx + 1}" if tracking_no else "")
+                    order_tracking = tracking_no if len(target_ids) == 1 else ""
+                    if not order_tracking and tracking_prefix:
+                        order_tracking = f"{tracking_prefix}{str(seq_start + idx).zfill(seq_width)}"
+                    elif not order_tracking and tracking_no:
+                        order_tracking = f"{tracking_no}-{idx + 1}"
                     repositories.ship_sales_order(
                         database_path,
                         order_id,
@@ -678,6 +779,30 @@ def warehouse_workbench():
         date_from=date_from,
         date_to=date_to,
     )
+
+
+@main_bp.route("/warehouse-workbench/import-shipments", methods=["POST"])
+@login_required
+@roles_required("admin", "warehouse")
+def import_shipments():
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        flash("请选择发货导入文件", "danger")
+        return redirect(url_for("main.warehouse_workbench"))
+    suffix = Path(upload.filename).suffix or ".xlsx"
+    with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        upload.save(tmp.name)
+        tmp_path = tmp.name
+    try:
+        result = repositories.import_excel(current_app.config["DATABASE_PATH"], tmp_path, "shipments", session.get("username", ""))
+        flash(f"批量发货完成：成功 {result['created']} 行，跳过 {result['skipped']} 行", "success" if not result["errors"] else "danger")
+        if result["errors"]:
+            flash("；".join(result["errors"][:5]), "danger")
+    except Exception as exc:
+        flash(f"导入失败：{exc}", "danger")
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+    return redirect(url_for("main.warehouse_workbench"))
 
 
 @main_bp.route("/partners", methods=["GET", "POST"])
@@ -738,6 +863,7 @@ def accounts():
         current_source_type=source_type,
         date_from=date_from,
         date_to=date_to,
+        accounts_snapshot=repositories.latest_snapshot_tokens(database_path)["accounts"],
     )
 
 

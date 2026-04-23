@@ -4,9 +4,11 @@
     <h2>采购中心</h2>
     <p class="hint">本页用于采购入库，保存后会同步增加库存并生成供应商应付。建议先看采购建议，再录入采购单。</p>
     <form class="form-grid compact" method="post">
-        <select name="supplier_id" required>{% for p in suppliers %}<option value="{{ p.id }}" {% if copy_document and copy_document.partner_id == p.id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}</select>
-        <input name="source_no" value="{{ copy_document.document_no ~ '-COPY' if copy_document else '' }}" placeholder="采购单号/备注">
-        <input name="note" value="{{ copy_document.note if copy_document else '' }}" placeholder="备注">
+        <input type="hidden" name="document_id" value="{{ editing_document.id if editing_document else '' }}">
+        <input type="hidden" name="expected_version" value="{{ editing_document.row_version if editing_document else '' }}">
+        <select name="partner_id" required>{% for p in suppliers %}<option value="{{ p.id }}" {% if (editing_document and editing_document.partner_id == p.id) or (not editing_document and copy_document and copy_document.partner_id == p.id) %}selected{% endif %}>{{ p.name }}</option>{% endfor %}</select>
+        <input name="source_no" value="{{ editing_document.document_no if editing_document else (copy_document.document_no ~ '-COPY' if copy_document else '') }}" placeholder="采购单号/备注">
+        <input name="note" value="{{ editing_document.note if editing_document else (copy_document.note if copy_document else '') }}" placeholder="备注">
         <div class="line-items">
             {% for line in form_lines %}
             <div class="line-item-row with-warehouse">
@@ -17,9 +19,9 @@
             </div>
             {% endfor %}
         </div>
-        <button>{{ "复制后采购入库" if copy_document else "采购入库" }}</button>
+        <button>{% if editing_document %}保存采购单修改{% elif copy_document %}复制后采购入库{% else %}采购入库{% endif %}</button>
     </form>
-    {% if copy_document %}<p class="hint"><a class="button-link" href="{{ url_for('main.purchase') }}">取消复制</a></p>{% endif %}
+    {% if copy_document or editing_document %}<p class="hint"><a class="button-link" href="{{ url_for('main.purchase') }}">取消{{ "编辑" if editing_document else "复制" }}</a></p>{% endif %}
     <form class="toolbar" method="post" enctype="multipart/form-data" action="{{ url_for('main.import_data', kind='purchase') }}">
         <a class="button-link" href="{{ url_for('main.template', kind='purchase') }}">下载采购导入模板</a>
         <input type="file" name="file" accept=".xlsx" required>
@@ -49,8 +51,8 @@
         <button>查询</button>
         <a class="button-link" href="{{ url_for('main.export', kind='purchase') }}">导出采购汇总</a>
     </form>
-    <div class="table-wrap"><table><thead><tr><th>创建时间</th><th>单号</th><th>来源方式</th><th>创建人</th><th>供应商</th><th>明细数</th><th>金额</th><th>状态</th></tr></thead><tbody>
-    {% for row in documents %}<tr><td>{{ row.created_at }}</td><td><a href="{{ url_for('main.document_detail', document_type='purchase', document_id=row.id) }}">{{ row.document_no }}</a></td><td>{{ row.source_channel|source_channel_name }}</td><td>{{ row.created_by or "-" }}</td><td>{{ row.partner_name }}</td><td>{{ row.line_count }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td><td>{{ row.status }}</td></tr>{% else %}<tr><td colspan="8" class="empty">暂无采购单</td></tr>{% endfor %}
+    <div class="table-wrap"><table><thead><tr><th>创建时间</th><th>单号</th><th>来源方式</th><th>创建人</th><th>供应商</th><th>明细数</th><th>金额</th><th>状态</th><th>操作</th></tr></thead><tbody>
+    {% for row in documents %}<tr><td>{{ row.created_at }}</td><td><a href="{{ url_for('main.document_detail', document_type='purchase', document_id=row.id) }}">{{ row.document_no }}</a></td><td>{{ row.source_channel|source_channel_name }}</td><td>{{ row.created_by or "-" }}</td><td>{{ row.partner_name }}</td><td>{{ row.line_count }}</td><td>{{ "%.2f"|format(row.total_amount) }}</td><td>{{ row.status }}</td><td>{% if row.status == 'confirmed' %}<a href="{{ url_for('main.purchase', edit_id=row.id) }}">编辑</a>{% else %}-{% endif %}</td></tr>{% else %}<tr><td colspan="9" class="empty">暂无采购单</td></tr>{% endfor %}
     </tbody></table></div>
 </section>
 <section><h2>最近流水</h2>{% include "_movement_table.html" %}</section>

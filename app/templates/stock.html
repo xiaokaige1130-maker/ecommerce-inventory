@@ -6,6 +6,7 @@
         <div>
             <h3>手工库存流水</h3>
             <form class="form-grid stack" method="post">
+                <input type="hidden" name="expected_stock_snapshot" value="{{ stock_snapshot }}">
                 <select name="movement_type">
                     <option value="adjust_in">盘盈入库</option>
                     <option value="adjust_out">盘亏出库</option>
@@ -18,6 +19,7 @@
                 <input name="unit_cost" type="number" step="0.01" placeholder="单价/成本">
                 <input name="source_no" placeholder="来源单号">
                 <input name="note" placeholder="备注">
+                <label><input type="checkbox" name="force_save" value="1"> 页面有新流水时仍继续保存</label>
                 <button>保存库存流水</button>
             </form>
         </div>

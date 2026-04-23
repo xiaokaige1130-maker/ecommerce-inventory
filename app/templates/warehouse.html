@@ -25,7 +25,10 @@
             <input type="hidden" name="action" value="ship">
             {% for row in orders %}{% if row.status in ['pending_review', 'locked'] %}<input type="hidden" name="order_ids" value="{{ row.id }}">{% endif %}{% endfor %}
             <input name="logistics_company" placeholder="批量发货物流">
-            <input name="tracking_no" placeholder="批量发货快递单号前缀">
+            <input name="tracking_prefix" placeholder="快递单号前缀">
+            <input name="tracking_start" type="number" value="1" placeholder="起始序号">
+            <input name="tracking_width" type="number" value="3" placeholder="序号位数">
+            <input name="tracking_no" placeholder="单个直填快递单号">
             <button type="submit">批量发货当前结果</button>
         </form>
         <form method="post">
@@ -34,6 +37,11 @@
             <button type="submit">批量取消当前结果</button>
         </form>
     </div>
+    <form class="toolbar" method="post" enctype="multipart/form-data" action="{{ url_for('main.import_shipments') }}">
+        <a class="button-link" href="{{ url_for('main.template', kind='shipments') }}">下载批量发货模板</a>
+        <input type="file" name="file" accept=".xlsx" required>
+        <button>导入批量发货</button>
+    </form>
     <div class="table-wrap"><table><thead><tr><th>创建时间</th><th>订单号</th><th>来源方式</th><th>创建人</th><th>状态</th><th>平台</th><th>店铺</th><th>客户</th><th>金额</th><th>查看</th><th>锁库</th><th>销售出库/发货</th><th>取消</th></tr></thead><tbody>
     {% for row in orders %}
         <tr>
