@@ -494,41 +494,76 @@ def save_location(database_path: str, form: dict) -> None:
             raise ValueError("该仓库下货位编码已存在") from exc
 
 
-def list_partners(database_path: str, partner_type: str = "") -> list[dict]:
+def list_partners(database_path: str, partner_type: str = "", keyword: str = "") -> list[dict]:
     sql = "SELECT * FROM partners WHERE is_active = 1"
     params = []
     if partner_type:
         sql += " AND partner_type = ?"
         params.append(partner_type)
+    clean_keyword = str(keyword).strip()
+    if clean_keyword:
+        like = f"%{clean_keyword}%"
+        sql += " AND (name LIKE ? OR COALESCE(contact_name, '') LIKE ? OR COALESCE(phone, '') LIKE ? OR COALESCE(address, '') LIKE ?)"
+        params.extend([like, like, like, like])
     sql += " ORDER BY partner_type, name"
     with get_connection(database_path) as conn:
         return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
 
+def get_partner(database_path: str, partner_id: int) -> dict | None:
+    with get_connection(database_path) as conn:
+        row = conn.execute("SELECT * FROM partners WHERE id = ?", (partner_id,)).fetchone()
+        return dict(row) if row else None
+
+
 def save_partner(database_path: str, form: dict) -> None:
+    partner_id = int(form.get("partner_id") or 0)
     partner_type = str(form.get("partner_type", "")).strip()
     name = str(form.get("name", "")).strip()
     if partner_type not in {"customer", "supplier"} or not name:
         raise ValueError("伙伴类型和名称不能为空")
     ts = now()
     with get_connection(database_path) as conn:
+        existing = conn.execute("SELECT id FROM partners WHERE partner_type = ? AND name = ?", (partner_type, name)).fetchone()
+        if existing and (not partner_id or existing["id"] != partner_id):
+            label = "客户" if partner_type == "customer" else "供应商"
+            raise ValueError(f"{label}名称已存在")
         try:
-            conn.execute(
-                """
-                INSERT INTO partners (partner_type, name, phone, contact_name, address, note, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    partner_type,
-                    name,
-                    str(form.get("phone", "")).strip(),
-                    str(form.get("contact_name", "")).strip(),
-                    str(form.get("address", "")).strip(),
-                    str(form.get("note", "")).strip(),
-                    ts,
-                    ts,
-                ),
-            )
+            if partner_id:
+                conn.execute(
+                    """
+                    UPDATE partners
+                    SET partner_type = ?, name = ?, phone = ?, contact_name = ?, address = ?, note = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        partner_type,
+                        name,
+                        str(form.get("phone", "")).strip(),
+                        str(form.get("contact_name", "")).strip(),
+                        str(form.get("address", "")).strip(),
+                        str(form.get("note", "")).strip(),
+                        ts,
+                        partner_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO partners (partner_type, name, phone, contact_name, address, note, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        partner_type,
+                        name,
+                        str(form.get("phone", "")).strip(),
+                        str(form.get("contact_name", "")).strip(),
+                        str(form.get("address", "")).strip(),
+                        str(form.get("note", "")).strip(),
+                        ts,
+                        ts,
+                    ),
+                )
             conn.commit()
         except sqlite3.IntegrityError as exc:
             label = "客户" if partner_type == "customer" else "供应商"
@@ -628,6 +663,7 @@ def create_document(
     source_no: str = "",
     note: str = "",
     created_by: str = "",
+    source_channel: str = "manual",
 ) -> dict:
     if document_type not in {"purchase", "sale"}:
         raise ValueError("无效单据类型")
@@ -657,13 +693,13 @@ def create_document(
                     item_name = item["item_name"] if item else str(item_id)
                     raise ValueError(f"{item_name} 库存不足：当前库存 {current_qty:g}，本次销售 {required_qty:g}")
         cur = conn.execute(
-            """
-            INSERT INTO documents (
-                document_no, document_type, partner_id, total_amount, note, created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (document_no, document_type, partner_id, total_amount, note, created_by, ts, ts),
-        )
+                """
+                INSERT INTO documents (
+                    document_no, document_type, source_channel, partner_id, total_amount, note, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (document_no, document_type, source_channel, partner_id, total_amount, note, created_by, ts, ts),
+            )
         document_id = cur.lastrowid
         for line in lines:
             qty = abs(float(line["quantity"]))
@@ -813,7 +849,7 @@ def account_summary(database_path: str) -> list[dict]:
         return [dict(row) for row in rows]
 
 
-def list_documents(database_path: str, document_type: str = "", keyword: str = "", limit: int = 100) -> list[dict]:
+def list_documents(database_path: str, document_type: str = "", keyword: str = "", source_channel: str = "", limit: int = 100) -> list[dict]:
     sql = """
         SELECT d.*, p.name AS partner_name, COUNT(dl.id) AS line_count
         FROM documents d
@@ -825,6 +861,9 @@ def list_documents(database_path: str, document_type: str = "", keyword: str = "
     if document_type:
         sql += " AND d.document_type = ?"
         params.append(document_type)
+    if source_channel:
+        sql += " AND COALESCE(d.source_channel, 'manual') = ?"
+        params.append(source_channel)
     clean_keyword = str(keyword).strip()
     if clean_keyword:
         like = f"%{clean_keyword}%"
@@ -868,7 +907,13 @@ def document_lines(database_path: str, document_id: int) -> list[dict]:
         ]
 
 
-def list_account_entries(database_path: str, partner_id: int | None = None, limit: int = 200) -> list[dict]:
+def list_account_entries(
+    database_path: str,
+    partner_id: int | None = None,
+    keyword: str = "",
+    source_type: str = "",
+    limit: int = 200,
+) -> list[dict]:
     sql = """
         SELECT ae.*, p.name AS partner_name, p.partner_type
         FROM account_entries ae
@@ -879,6 +924,14 @@ def list_account_entries(database_path: str, partner_id: int | None = None, limi
     if partner_id:
         sql += " AND ae.partner_id = ?"
         params.append(partner_id)
+    if source_type:
+        sql += " AND COALESCE(ae.source_type, '') = ?"
+        params.append(source_type)
+    clean_keyword = str(keyword).strip()
+    if clean_keyword:
+        like = f"%{clean_keyword}%"
+        sql += " AND (p.name LIKE ? OR COALESCE(ae.source_no, '') LIKE ? OR COALESCE(ae.note, '') LIKE ?)"
+        params.extend([like, like, like])
     sql += " ORDER BY ae.created_at DESC LIMIT ?"
     params.append(limit)
     with get_connection(database_path) as conn:
@@ -909,16 +962,17 @@ def create_sales_order(database_path: str, form: dict, created_by: str = "") -> 
         if existing:
             raise ValueError("订单号已存在")
         cur = conn.execute(
-            """
-            INSERT INTO sales_orders (
-                order_no, platform, shop_name, customer_id, customer_name, status, warehouse_id,
-                total_amount, note, created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                order_no,
-                str(form.get("platform", "")).strip() or "拼多多",
-                str(form.get("shop_name", "")).strip(),
+                """
+                INSERT INTO sales_orders (
+                    order_no, source_channel, platform, shop_name, customer_id, customer_name, status, warehouse_id,
+                    total_amount, note, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order_no,
+                    str(form.get("source_channel", "manual")).strip() or "manual",
+                    str(form.get("platform", "")).strip() or "拼多多",
+                    str(form.get("shop_name", "")).strip(),
                 int(form.get("customer_id") or 0) or None,
                 str(form.get("customer_name", "")).strip(),
                 warehouse_id,
@@ -944,7 +998,7 @@ def create_sales_order(database_path: str, form: dict, created_by: str = "") -> 
         return dict(row)
 
 
-def list_sales_orders(database_path: str, status: str = "", keyword: str = "", limit: int = 100) -> list[dict]:
+def list_sales_orders(database_path: str, status: str = "", keyword: str = "", source_channel: str = "", limit: int = 100) -> list[dict]:
     sql = """
         SELECT so.*, p.name AS partner_name, COUNT(sol.id) AS line_count
         FROM sales_orders so
@@ -956,6 +1010,9 @@ def list_sales_orders(database_path: str, status: str = "", keyword: str = "", l
     if status:
         sql += " AND so.status = ?"
         params.append(status)
+    if source_channel:
+        sql += " AND COALESCE(so.source_channel, 'manual') = ?"
+        params.append(source_channel)
     clean_keyword = str(keyword).strip()
     if clean_keyword:
         like = f"%{clean_keyword}%"
@@ -1405,16 +1462,26 @@ def handle_return_inbound(database_path: str, payload: dict) -> dict:
     return {"status": status, "return_inbound": return_inbound, "stock_movement": movement}
 
 
-def list_return_inbounds(database_path: str) -> list[dict]:
+def list_return_inbounds(database_path: str, status: str = "", keyword: str = "", limit: int = 200) -> list[dict]:
+    sql = """
+        SELECT ri.*, i.item_code, i.item_name
+        FROM return_inbounds ri
+        LEFT JOIN items i ON i.id = ri.item_id
+        WHERE 1 = 1
+    """
+    params: list = []
+    if status:
+        sql += " AND ri.status = ?"
+        params.append(status)
+    clean_keyword = str(keyword).strip()
+    if clean_keyword:
+        like = f"%{clean_keyword}%"
+        sql += " AND (ri.tracking_no LIKE ? OR COALESCE(ri.order_no, '') LIKE ? OR COALESCE(ri.raw_product_name, '') LIKE ? OR COALESCE(ri.customer_name, '') LIKE ?)"
+        params.extend([like, like, like, like])
+    sql += " ORDER BY ri.created_at DESC LIMIT ?"
+    params.append(limit)
     with get_connection(database_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT ri.*, i.item_code, i.item_name
-            FROM return_inbounds ri
-            LEFT JOIN items i ON i.id = ri.item_id
-            ORDER BY ri.created_at DESC
-            """
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
 
 
@@ -1651,6 +1718,7 @@ def _import_order_row(database_path: str, row: tuple, created_by: str, dry_run: 
     create_sales_order(
         database_path,
         {
+            "source_channel": "import",
             "platform": platform or "拼多多",
             "shop_name": shop or "默认店铺",
             "order_no": str(order_no).strip(),
@@ -1733,6 +1801,7 @@ def _import_purchase_row(database_path: str, row: tuple, created_by: str, dry_ru
         str(source_no or "").strip(),
         str(note or "").strip(),
         created_by,
+        source_channel="import",
     )
 
 

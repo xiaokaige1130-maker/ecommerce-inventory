@@ -16,40 +16,42 @@
         <button>批量导入商品</button>
     </form>
     <form class="form-grid" method="post">
+        <input type="hidden" name="item_id" value="{{ editing_item.id if editing_item else '' }}">
         <select name="item_type" required>
-            {% for key, label in item_types.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+            {% for key, label in item_types.items() %}<option value="{{ key }}" {% if editing_item and editing_item.item_type == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
         </select>
-        <input name="item_code" placeholder="编号" required>
-        <input name="item_name" placeholder="名称" required>
-        <input name="category" placeholder="分类">
-        <input name="unit" placeholder="单位" value="件">
-        <input name="sku" placeholder="SKU">
-        <input name="platform_sku" placeholder="平台SKU">
-        <input name="barcode" placeholder="条码">
-        <input name="spec" placeholder="规格型号">
-        <select name="default_warehouse_id">{% for w in warehouses %}<option value="{{ w.id }}">{{ w.name }}</option>{% endfor %}</select>
-        <select name="default_location_id"><option value="">默认货位</option>{% for loc in locations %}<option value="{{ loc.id }}">{{ loc.warehouse_name }} / {{ loc.location_code }}</option>{% endfor %}</select>
-        <select name="supplier_id"><option value="">默认供应商</option>{% for p in suppliers %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
-        <input name="lead_days" placeholder="采购提前期天数" type="number" step="1">
-        <input name="safety_stock" placeholder="安全库存" type="number" step="0.01">
-        <input name="purchase_price" placeholder="采购价" type="number" step="0.01">
-        <input name="cost_price" placeholder="成本价" type="number" step="0.01">
-        <input name="sale_price" placeholder="销售价" type="number" step="0.01">
-        <label class="check"><input type="checkbox" name="is_sellable" value="1"> 可销售</label>
-        <label class="check"><input type="checkbox" name="is_producible" value="1"> 可生产</label>
-        <label class="check"><input type="checkbox" name="is_packaging" value="1"> 包材</label>
-        <input name="note" placeholder="备注">
-        <button type="submit">新增货物</button>
+        <input name="item_code" value="{{ editing_item.item_code if editing_item else '' }}" placeholder="编号" required>
+        <input name="item_name" value="{{ editing_item.item_name if editing_item else '' }}" placeholder="名称" required>
+        <input name="category" value="{{ editing_item.category if editing_item else '' }}" placeholder="分类">
+        <input name="unit" placeholder="单位" value="{{ editing_item.unit if editing_item else '件' }}">
+        <input name="sku" value="{{ editing_item.sku if editing_item else '' }}" placeholder="SKU">
+        <input name="platform_sku" value="{{ editing_item.platform_sku if editing_item else '' }}" placeholder="平台SKU">
+        <input name="barcode" value="{{ editing_item.barcode if editing_item else '' }}" placeholder="条码">
+        <input name="spec" value="{{ editing_item.spec if editing_item else '' }}" placeholder="规格型号">
+        <select name="default_warehouse_id">{% for w in warehouses %}<option value="{{ w.id }}" {% if editing_item and editing_item.default_warehouse_id == w.id %}selected{% endif %}>{{ w.name }}</option>{% endfor %}</select>
+        <select name="default_location_id"><option value="">默认货位</option>{% for loc in locations %}<option value="{{ loc.id }}" {% if editing_item and editing_item.default_location_id == loc.id %}selected{% endif %}>{{ loc.warehouse_name }} / {{ loc.location_code }}</option>{% endfor %}</select>
+        <select name="supplier_id"><option value="">默认供应商</option>{% for p in suppliers %}<option value="{{ p.id }}" {% if editing_item and editing_item.supplier_id == p.id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}</select>
+        <input name="lead_days" value="{{ editing_item.lead_days if editing_item else '' }}" placeholder="采购提前期天数" type="number" step="1">
+        <input name="safety_stock" value="{{ editing_item.safety_stock if editing_item else '' }}" placeholder="安全库存" type="number" step="0.01">
+        <input name="purchase_price" value="{{ editing_item.purchase_price if editing_item else '' }}" placeholder="采购价" type="number" step="0.01">
+        <input name="cost_price" value="{{ editing_item.cost_price if editing_item else '' }}" placeholder="成本价" type="number" step="0.01">
+        <input name="sale_price" value="{{ editing_item.sale_price if editing_item else '' }}" placeholder="销售价" type="number" step="0.01">
+        <label class="check"><input type="checkbox" name="is_sellable" value="1" {% if editing_item and editing_item.is_sellable %}checked{% endif %}> 可销售</label>
+        <label class="check"><input type="checkbox" name="is_producible" value="1" {% if editing_item and editing_item.is_producible %}checked{% endif %}> 可生产</label>
+        <label class="check"><input type="checkbox" name="is_packaging" value="1" {% if editing_item and editing_item.is_packaging %}checked{% endif %}> 包材</label>
+        <input name="note" value="{{ editing_item.note if editing_item else '' }}" placeholder="备注">
+        <button type="submit">{{ "保存修改" if editing_item else "新增货物" }}</button>
     </form>
+    {% if editing_item %}<p class="hint"><a class="button-link" href="{{ url_for('main.items', item_type=current_type, keyword=keyword) }}">取消编辑</a></p>{% endif %}
 </section>
 <section>
     <div class="table-wrap">
     <table>
-        <thead><tr><th>类型</th><th>编号</th><th>名称</th><th>SKU</th><th>平台SKU</th><th>规格</th><th>单位</th><th>仓库</th><th>库存</th><th>安全库存</th><th>采购价</th><th>成本</th><th>售价</th></tr></thead>
+        <thead><tr><th>类型</th><th>编号</th><th>名称</th><th>SKU</th><th>平台SKU</th><th>规格</th><th>单位</th><th>仓库</th><th>库存</th><th>安全库存</th><th>采购价</th><th>成本</th><th>售价</th><th>操作</th></tr></thead>
         <tbody>
         {% for row in rows %}
-            <tr><td>{{ row.item_type|item_type_name }}</td><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td>{{ row.sku }}</td><td>{{ row.platform_sku }}</td><td>{{ row.spec }}</td><td>{{ row.unit }}</td><td>{{ row.warehouse_name }}</td><td>{{ row.stock_qty }}</td><td>{{ row.safety_stock }}</td><td>{{ row.purchase_price }}</td><td>{{ row.cost_price }}</td><td>{{ row.sale_price }}</td></tr>
-        {% else %}<tr><td colspan="13" class="empty">暂无货物</td></tr>{% endfor %}
+            <tr><td>{{ row.item_type|item_type_name }}</td><td>{{ row.item_code }}</td><td>{{ row.item_name }}</td><td>{{ row.sku }}</td><td>{{ row.platform_sku }}</td><td>{{ row.spec }}</td><td>{{ row.unit }}</td><td>{{ row.warehouse_name }}</td><td>{{ row.stock_qty }}</td><td>{{ row.safety_stock }}</td><td>{{ row.purchase_price }}</td><td>{{ row.cost_price }}</td><td>{{ row.sale_price }}</td><td><a href="{{ url_for('main.items', item_type=current_type, keyword=keyword, edit_id=row.id) }}">编辑</a></td></tr>
+        {% else %}<tr><td colspan="14" class="empty">暂无货物</td></tr>{% endfor %}
         </tbody>
     </table>
     </div>

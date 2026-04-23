@@ -46,6 +46,13 @@ client.post(
     data={"partner_type": "customer", "name": "默认客户"},
     follow_redirects=True,
 )
+edit_partner_resp = client.post(
+    "/partners",
+    data={"partner_id": "2", "partner_type": "customer", "name": "默认客户", "contact_name": "张三", "phone": "123456"},
+    follow_redirects=True,
+)
+assert edit_partner_resp.status_code == 200
+assert client.get("/partners?partner_type=customer&keyword=张三").status_code == 200
 client.post(
     "/items",
     data={
@@ -57,6 +64,27 @@ client.post(
     },
     follow_redirects=True,
 )
+edit_item_resp = client.post(
+    "/items",
+    data={
+        "item_id": "2",
+        "item_type": "finished",
+        "item_code": "CP001",
+        "item_name": "测试成品-改",
+        "sku": "SKU001",
+        "unit": "件",
+        "default_warehouse_id": "1",
+        "default_location_id": "1",
+        "supplier_id": "1",
+        "lead_days": "5",
+        "sale_price": "109",
+        "safety_stock": "6",
+        "is_sellable": "1",
+    },
+    follow_redirects=True,
+)
+assert edit_item_resp.status_code == 200
+assert client.get("/items?keyword=测试成品-改").status_code == 200
 client.post(
     "/locations",
     data={"warehouse_id": "1", "location_code": "A-01"},
@@ -207,6 +235,8 @@ settlement_resp = client.post(
 assert settlement_resp.status_code == 200
 assert client.get("/purchase?keyword=PO-TEST").status_code == 200
 assert client.get("/sales?keyword=SO-TEST").status_code == 200
+assert client.get("/stock?movement_type=adjust_in&movement_keyword=SEED-FINISHED").status_code == 200
+assert client.get("/accounts?source_type=payment&keyword=PAY-TEST").status_code == 200
 assert client.get("/documents/purchase/1").status_code == 200
 assert client.get("/documents/sale/2").status_code == 200
 
@@ -266,6 +296,7 @@ assert pending_resp.status_code == 200
 assert pending_resp.get_json()["result"]["status"] == "pending_match"
 match_resp = client.post("/returns", data={"return_id": "2", "item_id": "2"}, follow_redirects=True)
 assert match_resp.status_code == 200
+assert client.get("/returns?status=matched_inbound&keyword=YT001").status_code == 200
 assert client.get("/stock").status_code == 200
 assert client.get("/returns").status_code == 200
 assert client.get("/warehouse-workbench").status_code == 200

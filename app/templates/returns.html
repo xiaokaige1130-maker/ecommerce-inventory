@@ -8,6 +8,16 @@
         <button>立即同步退货系统</button>
         <a class="button-link" href="{{ url_for('main.export', kind='returns') }}">导出退货对接</a>
     </form>
+    <form class="toolbar" method="get">
+        <select name="status">
+            <option value="">全部状态</option>
+            {% for value in ["pending_match", "matched_inbound", "external_abnormal"] %}
+            <option value="{{ value }}" {% if current_status == value %}selected{% endif %}>{{ value }}</option>
+            {% endfor %}
+        </select>
+        <input name="keyword" value="{{ keyword }}" placeholder="快递单号 / 订单号 / 商品 / 客户">
+        <button>查询</button>
+    </form>
     <div class="table-wrap"><table><thead><tr><th>时间</th><th>状态</th><th>快递单号</th><th>订单号</th><th>原始商品</th><th>SKU</th><th>匹配成品</th><th>数量</th><th>客户</th></tr></thead><tbody>
     {% for row in rows %}
         <tr>

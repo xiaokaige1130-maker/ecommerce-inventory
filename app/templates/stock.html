@@ -55,5 +55,41 @@
     {% for row in locations %}<tr><td>{{ row.warehouse_name }}</td><td>{{ row.location_code }}</td><td>{{ row.note }}</td></tr>{% else %}<tr><td colspan="3" class="empty">暂无货位</td></tr>{% endfor %}
     </tbody></table></div>
 </section>
-<section><h2>库存流水</h2>{% include "_movement_table.html" %}</section>
+<section>
+    <h2>库存流水</h2>
+    <form class="toolbar" method="get">
+        <select name="movement_type">
+            <option value="">全部动作</option>
+            {% for key in ["purchase_in", "sale_out", "return_in", "adjust_in", "adjust_out", "production_in", "consume_out"] %}
+            <option value="{{ key }}" {% if current_movement_type == key %}selected{% endif %}>{{ key|movement_type_name }}</option>
+            {% endfor %}
+        </select>
+        <input name="movement_keyword" value="{{ movement_keyword }}" placeholder="商品 / 来源单号 / 备注">
+        <button>查询</button>
+    </form>
+    <div class="table-wrap">
+    <table>
+        <thead><tr><th>时间</th><th>动作</th><th>编号</th><th>货物</th><th>类型</th><th>仓库</th><th>数量</th><th>来源方式</th><th>来源单号</th><th>创建人</th><th>备注</th></tr></thead>
+        <tbody>
+        {% for row in movements %}
+            <tr>
+                <td>{{ row.created_at }}</td>
+                <td>{{ row.movement_type|movement_type_name }}</td>
+                <td>{{ row.item_code }}</td>
+                <td>{{ row.item_name }}</td>
+                <td>{{ row.item_type|item_type_name }}</td>
+                <td>{{ row.warehouse_name }}</td>
+                <td class="{{ 'neg' if row.quantity < 0 else 'pos' }}">{{ row.quantity }}</td>
+                <td>{{ row.source_type|source_channel_name }}</td>
+                <td>{{ row.source_no or "-" }}</td>
+                <td>{{ row.created_by or "-" }}</td>
+                <td>{{ row.note }}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="11" class="empty">暂无数据</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</section>
 {% endblock %}

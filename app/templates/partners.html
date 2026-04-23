@@ -2,17 +2,28 @@
 {% block content %}
 <section>
     <h2>客户供应商</h2>
-    <form class="form-grid compact" method="post">
-        <select name="partner_type"><option value="customer">客户</option><option value="supplier">供应商</option></select>
-        <input name="name" placeholder="名称" required>
-        <input name="contact_name" placeholder="联系人">
-        <input name="phone" placeholder="电话">
-        <input name="address" placeholder="地址">
-        <input name="note" placeholder="备注">
-        <button>新增</button>
+    <form class="toolbar" method="get">
+        <select name="partner_type">
+            <option value="">全部类型</option>
+            <option value="customer" {% if current_partner_type == 'customer' %}selected{% endif %}>客户</option>
+            <option value="supplier" {% if current_partner_type == 'supplier' %}selected{% endif %}>供应商</option>
+        </select>
+        <input name="keyword" value="{{ keyword }}" placeholder="名称 / 联系人 / 电话 / 地址">
+        <button>查询</button>
     </form>
+    <form class="form-grid compact" method="post">
+        <input type="hidden" name="partner_id" value="{{ editing_partner.id if editing_partner else '' }}">
+        <select name="partner_type"><option value="customer" {% if editing_partner and editing_partner.partner_type == 'customer' %}selected{% endif %}>客户</option><option value="supplier" {% if editing_partner and editing_partner.partner_type == 'supplier' %}selected{% endif %}>供应商</option></select>
+        <input name="name" value="{{ editing_partner.name if editing_partner else '' }}" placeholder="名称" required>
+        <input name="contact_name" value="{{ editing_partner.contact_name if editing_partner else '' }}" placeholder="联系人">
+        <input name="phone" value="{{ editing_partner.phone if editing_partner else '' }}" placeholder="电话">
+        <input name="address" value="{{ editing_partner.address if editing_partner else '' }}" placeholder="地址">
+        <input name="note" value="{{ editing_partner.note if editing_partner else '' }}" placeholder="备注">
+        <button>{{ "保存修改" if editing_partner else "新增" }}</button>
+    </form>
+    {% if editing_partner %}<p class="hint"><a class="button-link" href="{{ url_for('main.partners', partner_type=current_partner_type, keyword=keyword) }}">取消编辑</a></p>{% endif %}
 </section>
-<section><div class="table-wrap"><table><thead><tr><th>类型</th><th>名称</th><th>联系人</th><th>电话</th><th>地址</th><th>备注</th></tr></thead><tbody>
-{% for row in rows %}<tr><td>{{ row.partner_type|partner_type_name }}</td><td>{{ row.name }}</td><td>{{ row.contact_name }}</td><td>{{ row.phone }}</td><td>{{ row.address }}</td><td>{{ row.note }}</td></tr>{% else %}<tr><td colspan="6" class="empty">暂无数据</td></tr>{% endfor %}
+<section><div class="table-wrap"><table><thead><tr><th>类型</th><th>名称</th><th>联系人</th><th>电话</th><th>地址</th><th>备注</th><th>操作</th></tr></thead><tbody>
+{% for row in rows %}<tr><td>{{ row.partner_type|partner_type_name }}</td><td>{{ row.name }}</td><td>{{ row.contact_name }}</td><td>{{ row.phone }}</td><td>{{ row.address }}</td><td>{{ row.note }}</td><td><a href="{{ url_for('main.partners', partner_type=current_partner_type, keyword=keyword, edit_id=row.id) }}">编辑</a></td></tr>{% else %}<tr><td colspan="7" class="empty">暂无数据</td></tr>{% endfor %}
 </tbody></table></div></section>
 {% endblock %}

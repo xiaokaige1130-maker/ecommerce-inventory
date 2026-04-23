@@ -5,6 +5,7 @@
     <div class="detail-grid">
         <div><span>单号</span><strong>{{ document.document_no }}</strong></div>
         <div><span>类型</span><strong>{{ "采购入库" if document.document_type == "purchase" else "销售出库" }}</strong></div>
+        <div><span>来源方式</span><strong>{{ document.source_channel|source_channel_name }}</strong></div>
         <div><span>对象</span><strong>{{ document.partner_name or "-" }}</strong></div>
         <div><span>状态</span><strong>{{ document.status }}</strong></div>
         <div><span>总金额</span><strong>{{ "%.2f"|format(document.total_amount) }}</strong></div>

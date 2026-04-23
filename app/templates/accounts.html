@@ -52,8 +52,22 @@
 </section>
 <section>
     <h2>账目明细</h2>
-    <div class="table-wrap"><table><thead><tr><th>时间</th><th>对象</th><th>科目</th><th>方向</th><th>金额</th><th>来源</th><th>备注</th></tr></thead><tbody>
-    {% for row in entries %}<tr><td>{{ row.created_at }}</td><td>{{ row.partner_name }}</td><td>{{ row.account_type }}</td><td>{{ row.direction }}</td><td>{{ "%.2f"|format(row.amount) }}</td><td>{{ row.source_no or row.source_type }}</td><td>{{ row.note }}</td></tr>{% else %}<tr><td colspan="7" class="empty">暂无明细</td></tr>{% endfor %}
+    <form class="toolbar" method="get">
+        <select name="partner_id">
+            <option value="">全部对象</option>
+            {% for p in partners %}<option value="{{ p.id }}" {% if current_partner_id == p.id %}selected{% endif %}>{{ p.partner_type|partner_type_name }} - {{ p.name }}</option>{% endfor %}
+        </select>
+        <select name="source_type">
+            <option value="">全部来源</option>
+            {% for value in ["purchase", "sale", "sales_order", "payment"] %}
+            <option value="{{ value }}" {% if current_source_type == value %}selected{% endif %}>{{ value|source_channel_name }}</option>
+            {% endfor %}
+        </select>
+        <input name="keyword" value="{{ keyword }}" placeholder="对象 / 来源单号 / 备注">
+        <button>查询</button>
+    </form>
+    <div class="table-wrap"><table><thead><tr><th>时间</th><th>对象</th><th>科目</th><th>方向</th><th>金额</th><th>来源方式</th><th>来源单号</th><th>创建人</th><th>备注</th></tr></thead><tbody>
+    {% for row in entries %}<tr><td>{{ row.created_at }}</td><td>{{ row.partner_name }}</td><td>{{ row.account_type }}</td><td>{{ row.direction }}</td><td>{{ "%.2f"|format(row.amount) }}</td><td>{{ row.source_type|source_channel_name }}</td><td>{{ row.source_no or "-" }}</td><td>{{ row.created_by or "-" }}</td><td>{{ row.note }}</td></tr>{% else %}<tr><td colspan="9" class="empty">暂无明细</td></tr>{% endfor %}
     </tbody></table></div>
 </section>
 {% endblock %}

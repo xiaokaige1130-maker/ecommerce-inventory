@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_no TEXT NOT NULL UNIQUE,
     document_type TEXT NOT NULL,
+    source_channel TEXT NOT NULL DEFAULT 'manual',
     partner_id INTEGER,
     status TEXT NOT NULL DEFAULT 'confirmed',
     total_amount REAL NOT NULL DEFAULT 0,
@@ -119,6 +120,7 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS sales_orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_no TEXT NOT NULL UNIQUE,
+    source_channel TEXT NOT NULL DEFAULT 'manual',
     platform TEXT,
     shop_name TEXT,
     customer_id INTEGER,
@@ -303,6 +305,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     migrations = {
         "users": {"role": "TEXT NOT NULL DEFAULT 'admin'"},
         "stock_movements": {"document_id": "INTEGER"},
+        "documents": {"source_channel": "TEXT NOT NULL DEFAULT 'manual'"},
+        "sales_orders": {"source_channel": "TEXT NOT NULL DEFAULT 'manual'"},
         "items": {
             "default_location_id": "INTEGER",
             "platform_sku": "TEXT",

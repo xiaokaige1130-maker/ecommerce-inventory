@@ -116,6 +116,23 @@ def order_status_name(value: str) -> str:
     }.get(value, value or "-")
 
 
+@main_bp.app_template_filter("source_channel_name")
+def source_channel_name(value: str) -> str:
+    return {
+        "manual": "手工录入",
+        "import": "批量导入",
+        "api": "API推送",
+        "sync": "系统同步",
+        "purchase": "采购单",
+        "sale": "销售单",
+        "sales_order": "订单发货",
+        "payment": "收付款",
+        "return_system": "API推送",
+        "return_system_db": "系统同步",
+        "return_match": "人工匹配",
+    }.get(value, value or "-")
+
+
 @main_bp.before_app_request
 def require_login():
     allowed = {"main.login", "main.api_return_inbound", "static"}
@@ -233,7 +250,7 @@ def home():
     if role in {"admin", "boss"}:
         context["home_mode"] = "owner"
     elif role == "warehouse":
-        orders = repositories.list_sales_orders(database_path, "", 100)
+        orders = repositories.list_sales_orders(database_path, limit=100)
         stock_rows = repositories.list_stock(database_path)
         returns = repositories.list_return_inbounds(database_path)
         context.update(
@@ -255,13 +272,13 @@ def home():
             purchase_focus={
                 "needs_buy": sum(1 for row in suggestions if (row.get("suggest_qty") or 0) > 0),
                 "suppliers": len(repositories.list_partners(database_path, "supplier")),
-                "recent_docs": len(repositories.list_documents(database_path, "purchase", 10)),
+                "recent_docs": len(repositories.list_documents(database_path, "purchase", limit=10)),
             },
             purchase_suggestions=suggestions[:8],
-            purchase_documents=repositories.list_documents(database_path, "purchase", 8),
+            purchase_documents=repositories.list_documents(database_path, "purchase", limit=8),
         )
     elif role == "sales":
-        orders = repositories.list_sales_orders(database_path, "", 100)
+        orders = repositories.list_sales_orders(database_path, limit=100)
         context.update(
             home_mode="sales",
             sales_focus={
@@ -271,7 +288,7 @@ def home():
                 "customers": len(repositories.list_partners(database_path, "customer")),
             },
             sales_orders=orders[:8],
-            sales_documents=repositories.list_documents(database_path, "sale", 8),
+            sales_documents=repositories.list_documents(database_path, "sale", limit=8),
         )
     else:
         context["home_mode"] = "staff"
@@ -391,6 +408,8 @@ def items():
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.items", item_type=request.form.get("item_type", "")))
+    edit_id = int(request.args.get("edit_id") or 0)
+    editing_item = repositories.get_item(database_path, edit_id) if edit_id else None
     rows = repositories.list_items(
         database_path,
         item_type=str(request.args.get("item_type", "")).strip(),
@@ -406,6 +425,7 @@ def items():
         item_types=repositories.ITEM_TYPES,
         current_type=str(request.args.get("item_type", "")).strip(),
         keyword=str(request.args.get("keyword", "")).strip(),
+        editing_item=editing_item,
     )
 
 
@@ -432,13 +452,17 @@ def stock():
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.stock"))
+    movement_keyword = str(request.args.get("movement_keyword", "")).strip()
+    movement_type = str(request.args.get("movement_type", "")).strip()
     return render_template(
         "stock.html",
         stock_rows=repositories.list_stock(database_path),
-        movements=repositories.recent_movements(database_path),
+        movements=repositories.recent_movements(database_path, keyword=movement_keyword, movement_type=movement_type),
         items=repositories.list_items(database_path),
         warehouses=repositories.list_warehouses(database_path),
         locations=repositories.list_locations(database_path),
+        movement_keyword=movement_keyword,
+        current_movement_type=movement_type,
     )
 
 
@@ -459,20 +483,24 @@ def purchase():
                 source_no=source_no,
                 note=str(request.form.get("note", "")).strip(),
                 created_by=session.get("username", ""),
+                source_channel="manual",
             )
             flash("采购入库和应付账款已保存", "success")
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.purchase"))
+    keyword = str(request.args.get("keyword", "")).strip()
+    source_channel = str(request.args.get("source_channel", "")).strip()
     return render_template(
         "purchase.html",
         items=repositories.list_items(database_path),
         warehouses=repositories.list_warehouses(database_path),
         suppliers=repositories.list_partners(database_path, "supplier"),
         movements=repositories.recent_movements(database_path, limit=30),
-        documents=repositories.list_documents(database_path, "purchase", str(request.args.get("keyword", "")).strip(), 50),
+        documents=repositories.list_documents(database_path, "purchase", keyword, source_channel, 50),
         suggestions=repositories.purchase_suggestions(database_path),
-        keyword=str(request.args.get("keyword", "")).strip(),
+        keyword=keyword,
+        current_source_channel=source_channel,
     )
 
 
@@ -493,19 +521,23 @@ def sales():
                 source_no=source_no,
                 note=str(request.form.get("note", "")).strip(),
                 created_by=session.get("username", ""),
+                source_channel="manual",
             )
             flash("销售出库和应收账款已保存", "success")
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.sales"))
+    keyword = str(request.args.get("keyword", "")).strip()
+    source_channel = str(request.args.get("source_channel", "")).strip()
     return render_template(
         "sales.html",
         items=repositories.list_items(database_path, "finished"),
         warehouses=repositories.list_warehouses(database_path),
         customers=repositories.list_partners(database_path, "customer"),
         movements=repositories.recent_movements(database_path, limit=30),
-        documents=repositories.list_documents(database_path, "sale", str(request.args.get("keyword", "")).strip(), 50),
-        keyword=str(request.args.get("keyword", "")).strip(),
+        documents=repositories.list_documents(database_path, "sale", keyword, source_channel, 50),
+        keyword=keyword,
+        current_source_channel=source_channel,
     )
 
 
@@ -521,19 +553,23 @@ def orders():
         except Exception as exc:
             flash(f"订单保存失败：{exc}", "danger")
         return redirect(url_for("main.orders"))
+    keyword = str(request.args.get("keyword", "")).strip()
+    source_channel = str(request.args.get("source_channel", "")).strip()
     return render_template(
         "orders.html",
         rows=repositories.list_sales_orders(
             database_path,
             str(request.args.get("status", "")).strip(),
-            str(request.args.get("keyword", "")).strip(),
+            keyword,
+            source_channel,
             100,
         ),
         items=repositories.list_items(database_path, "finished"),
         warehouses=repositories.list_warehouses(database_path),
         customers=repositories.list_partners(database_path, "customer"),
         current_status=str(request.args.get("status", "")).strip(),
-        keyword=str(request.args.get("keyword", "")).strip(),
+        keyword=keyword,
+        current_source_channel=source_channel,
         platforms=repositories.PLATFORMS,
     )
 
@@ -567,7 +603,7 @@ def warehouse_workbench():
         return redirect(url_for("main.warehouse_workbench"))
     return render_template(
         "warehouse.html",
-        orders=repositories.list_sales_orders(database_path, "", 100),
+        orders=repositories.list_sales_orders(database_path, limit=100),
         stock_rows=repositories.list_stock(database_path),
     )
 
@@ -584,7 +620,17 @@ def partners():
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.partners"))
-    return render_template("partners.html", rows=repositories.list_partners(database_path))
+    partner_type = str(request.args.get("partner_type", "")).strip()
+    keyword = str(request.args.get("keyword", "")).strip()
+    edit_id = int(request.args.get("edit_id") or 0)
+    editing_partner = repositories.get_partner(database_path, edit_id) if edit_id else None
+    return render_template(
+        "partners.html",
+        rows=repositories.list_partners(database_path, partner_type, keyword),
+        current_partner_type=partner_type,
+        keyword=keyword,
+        editing_partner=editing_partner,
+    )
 
 
 @main_bp.route("/accounts", methods=["GET", "POST"])
@@ -604,12 +650,18 @@ def accounts():
         except Exception as exc:
             flash(f"保存失败：{exc}", "danger")
         return redirect(url_for("main.accounts"))
+    partner_id = int(request.args.get("partner_id") or 0) or None
+    keyword = str(request.args.get("keyword", "")).strip()
+    source_type = str(request.args.get("source_type", "")).strip()
     return render_template(
         "accounts.html",
         rows=repositories.account_summary(database_path),
         partners=repositories.list_partners(database_path),
-        entries=repositories.list_account_entries(database_path),
+        entries=repositories.list_account_entries(database_path, partner_id, keyword, source_type),
         settlements=repositories.list_platform_settlements(database_path),
+        current_partner_id=partner_id or "",
+        keyword=keyword,
+        current_source_type=source_type,
     )
 
 
@@ -630,11 +682,15 @@ def returns():
         except Exception as exc:
             flash(f"处理失败：{exc}", "danger")
         return redirect(url_for("main.returns"))
+    status = str(request.args.get("status", "")).strip()
+    keyword = str(request.args.get("keyword", "")).strip()
     return render_template(
         "returns.html",
-        rows=repositories.list_return_inbounds(database_path),
+        rows=repositories.list_return_inbounds(database_path, status, keyword),
         finished_items=repositories.list_items(database_path, "finished"),
         after_sales=repositories.list_after_sales(database_path),
+        current_status=status,
+        keyword=keyword,
     )
 
 
