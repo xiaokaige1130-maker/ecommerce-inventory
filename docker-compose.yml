@@ -9,7 +9,7 @@ services:
       AUTH_USERNAME: ${AUTH_USERNAME:-admin}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-admin123}
       RETURN_API_TOKEN: ${RETURN_API_TOKEN:-change-me}
-      RETURN_SYSTEM_DATABASE_PATH: ${RETURN_SYSTEM_DATABASE_PATH:-}
+      RETURN_SYSTEM_DATABASE_PATH: ${RETURN_SYSTEM_DATABASE_PATH:-/return-system-data/app.db}
       DATABASE_PATH: /app/runtime/data/app.db
       EXPORT_DIR: /app/runtime/exports
       HOST: 0.0.0.0
@@ -17,5 +17,6 @@ services:
     volumes:
       - ./data:/app/runtime/data
       - ./exports:/app/runtime/exports
+      - ../warehouse-management/data:/return-system-data:ro
     ports:
       - "${HOST_PORT:-5100}:5100"
